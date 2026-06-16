@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: node-app
-        image: saharbe/portfolio-app-node:v1
+        image: saharbe/portfolio-app-node:v2
         ports:
         - containerPort: 3000
         env:

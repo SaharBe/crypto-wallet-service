@@ -32,7 +32,7 @@ module "vpc" {
 
   tags = {
     Environment = "production"
-    Project     = "crypto-wallet-idp"
+    Project     = "crypto-wallet-service"
     ManagedBy   = "OpenTofu"
   }
 }

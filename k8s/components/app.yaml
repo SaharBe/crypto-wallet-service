@@ -41,7 +41,7 @@ spec:
             if [ -f /vault/secrets/database ]; then
               source /vault/secrets/database
             fi
-            node server.js # פקודת ההרצה המקורית של האפליקציה שלך
+            node server.js
         env:
         - name: DB_HOST
           value: "postgres-service"

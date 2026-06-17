@@ -1,14 +1,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: crypto-wallet-gitops
+  name: crypto-wallet-app
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/SaharBe/crypto-wallet-service.git'
+    repoURL: 'https://github.com/SaharBenYitzhak/crypto-wallet-idp.git'
     targetRevision: HEAD
-    path: k8s
+    path: k8s/components
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: default

@@ -38,6 +38,7 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
+            cd /usr/src/app || cd /app || echo "Using current dir"
             if [ -f /vault/secrets/database ]; then
               source /vault/secrets/database
             fi

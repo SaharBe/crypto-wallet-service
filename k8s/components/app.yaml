@@ -42,7 +42,7 @@ spec:
             if [ -f /vault/secrets/database ]; then
               source /vault/secrets/database
             fi
-            node server.js
+            node index.js
         env:
         - name: DB_HOST
           value: "postgres-service"

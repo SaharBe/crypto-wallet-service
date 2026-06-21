@@ -19,7 +19,7 @@ spec:
         injector:
           enabled: true
           certs:
-            secretName: "vault-agent-injector-certs"
+            secretName: null
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: vault

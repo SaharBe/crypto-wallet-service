@@ -21,6 +21,7 @@ spec:
     metadata:
       labels:
         app: node-app
+        app.kubernetes.io/name: node-app
       annotations:
         vault.hashicorp.com/agent-inject: 'true'
         vault.hashicorp.com/role: 'crypto-app-role'

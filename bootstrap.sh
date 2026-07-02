@@ -46,6 +46,11 @@ kubectl patch application crypto-wallet-app -n argocd --type merge -p '{"spec":{
 echo -e "\n🔹 Step 6: Initializing Vault (auth, policy, role, secrets)..."
 
 echo "⌛ Waiting for Vault pod to become Ready..."
+until kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server 2>&1 | grep -q -v "No resources found"; do
+  sleep 2
+done
+
+echo "⌛ Waiting for Vault pod to become Ready..."
 kubectl wait pod -n vault \
   -l app.kubernetes.io/name=vault,component=server \
   --for=condition=Ready \

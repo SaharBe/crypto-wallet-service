@@ -20,3 +20,8 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      # ClusterSecretStore/ExternalSecret CRDs (installed by the external-secrets
+      # Application, wave 0) don't exist on first sync. Without this, ArgoCD's
+      # pre-sync validation fails on those resources and aborts the whole
+      # operation before wave 0 ever runs.
+      - SkipDryRunOnMissingResource=true

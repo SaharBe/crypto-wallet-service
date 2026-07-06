@@ -16,3 +16,8 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      # Same CRD-bootstrap issue as root-app: external-secret.yaml here uses
+      # ClusterSecretStore/ExternalSecret, whose CRDs are installed by a
+      # separate Application (external-secrets) with its own reconcile loop.
+      - SkipDryRunOnMissingResource=true

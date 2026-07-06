@@ -1,4 +1,4 @@
-variable "auth_backend_path" {
+variable "auth_backend" {
   description = <<-EOT
     Path of an already-enabled & configured Vault Kubernetes auth backend
     (see the root module's vault_auth_backend/vault_kubernetes_auth_backend_config
@@ -6,7 +6,7 @@ variable "auth_backend_path" {
     it must live outside this module, since Vault only allows one mount per
     path and this module is instantiated once per role.
   EOT
-  type = string
+  type        = string
 }
 
 variable "policy_name" {

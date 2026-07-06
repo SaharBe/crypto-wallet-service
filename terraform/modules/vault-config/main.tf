@@ -22,7 +22,7 @@ resource "vault_policy" "this" {
 }
 
 resource "vault_kubernetes_auth_backend_role" "this" {
-  backend                          = var.auth_backend_path
+  backend                          = var.auth_backend
   role_name                        = var.role_name
   bound_service_account_names      = var.bound_service_account_names
   bound_service_account_namespaces = var.bound_service_account_namespaces

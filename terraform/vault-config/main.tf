@@ -19,7 +19,7 @@ module "crypto_app" {
   source     = "../modules/vault-config"
   depends_on = [vault_kubernetes_auth_backend_config.this]
 
-  auth_backend_path                = vault_auth_backend.kubernetes.path
+  auth_backend                     = vault_auth_backend.kubernetes.path
   policy_name                      = "crypto-app-policy"
   role_name                        = "crypto-app-role"
   bound_service_account_names      = ["crypto-sa"]
@@ -41,7 +41,7 @@ module "argocd_repo" {
   source     = "../modules/vault-config"
   depends_on = [vault_kubernetes_auth_backend_config.this]
 
-  auth_backend_path                = vault_auth_backend.kubernetes.path
+  auth_backend                     = vault_auth_backend.kubernetes.path
   policy_name                      = "argocd-repo-policy"
   role_name                        = "argocd-repo-role"
   bound_service_account_names      = ["argocd-repo-reader"]

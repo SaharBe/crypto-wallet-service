@@ -1,0 +1,5 @@
+# Copy to backend.hcl (gitignored) and fill in with the outputs of
+# `terraform -chdir=../state-backend output`.
+bucket         = "crypto-wallet-tfstate-<account-id>"
+region         = "us-east-1"
+dynamodb_table = "crypto-wallet-tfstate-lock"

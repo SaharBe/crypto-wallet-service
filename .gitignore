@@ -5,3 +5,10 @@ npm-debug.log
 # Docker local data
 .pgdata/
 k8s/repo-secret.yaml
+
+# Bootstrap-time secrets (DB creds, GitHub PAT, Vault token) — never committed
+secrets.env
+
+# Stray Terraform state (real state now lives under terraform/*/ + remote backend)
+/terraform.tfstate
+/terraform.tfstate.backup

@@ -16,10 +16,10 @@ spec:
         server:
           dev:
             enabled: true
+        # Secrets now flow through External Secrets Operator instead of the
+        # Agent Injector sidecar — no mutating webhook/caBundle to manage.
         injector:
-          enabled: true
-          certs:
-            secretName: null
+          enabled: false
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: vault
@@ -29,8 +29,3 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-  ignoreDifferences:
-    - group: admissionregistration.k8s.io
-      kind: MutatingWebhookConfiguration
-      jsonPointers:
-        - /webhooks/0/clientConfig/caBundle

@@ -5,3 +5,7 @@
 *.tfvars.json
 .terraform.lock.hcl
 crash.log
+
+# Backend config contains account-specific (not secret, but env-specific)
+# bucket/table names — every dev fills their own from state-backend's outputs.
+backend.hcl

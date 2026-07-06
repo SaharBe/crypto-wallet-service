@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (already gitignored via *.tfvars) or export the
+# equivalent TF_VAR_* env vars — bootstrap.sh does the latter from secrets.env.
+vault_token     = "root"
+db_username     = "myuser"
+db_password     = "mypassword"
+github_username = "SaharBe"
+github_pat      = "changeme"

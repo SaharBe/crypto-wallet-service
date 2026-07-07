@@ -20,6 +20,17 @@ spec:
         # enable any of those later, they'll need the same registry override.
         image:
           repository: bitnamilegacy/kafka
+        # This chart defaults every listener to SASL_PLAINTEXT (auth
+        # required). Matching this project's existing posture (Vault dev
+        # mode, static root token) - PLAINTEXT everywhere, no client
+        # credentials to manage, for a learning/portfolio deployment.
+        listeners:
+          client:
+            protocol: PLAINTEXT
+          controller:
+            protocol: PLAINTEXT
+          interbroker:
+            protocol: PLAINTEXT
         # Chart 32.x dropped Zookeeper and the kraft.enabled toggle entirely —
         # KRaft is now the only mode. Single combined controller+broker node
         # for a learning setup (default is 3 controller-only + 0 broker nodes).

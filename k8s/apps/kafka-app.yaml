@@ -11,6 +11,15 @@ spec:
     targetRevision: 32.4.3
     helm:
       values: |
+        # docker.io/bitnami/* images were discontinued (Bitnami moved to a
+        # paid "Secure Images" tier in 2025) - docker.io/bitnami/kafka now has
+        # zero tags. bitnamilegacy/* is the frozen last-free-version mirror.
+        # Only the main image is active with our config (metrics/volume-
+        # permissions/autoDiscovery/provisioning are all disabled by default
+        # in this chart, so their bitnami/* images are never pulled) - if you
+        # enable any of those later, they'll need the same registry override.
+        image:
+          repository: bitnamilegacy/kafka
         # Chart 32.x dropped Zookeeper and the kraft.enabled toggle entirely —
         # KRaft is now the only mode. Single combined controller+broker node
         # for a learning setup (default is 3 controller-only + 0 broker nodes).

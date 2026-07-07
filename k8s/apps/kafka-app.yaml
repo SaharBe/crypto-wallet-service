@@ -8,17 +8,18 @@ spec:
   source:
     repoURL: 'registry-1.docker.io/bitnamicharts'
     chart: kafka
-    targetRevision: 31.2.1
-    type: helm
+    targetRevision: 32.4.3
     helm:
       values: |
-        replicaCount: 1
-        kraft:
-          enabled: true
-        zookeeper:
-          enabled: false
-        persistence:
-          enabled: false
+        # Chart 32.x dropped Zookeeper and the kraft.enabled toggle entirely —
+        # KRaft is now the only mode. Single combined controller+broker node
+        # for a learning setup (default is 3 controller-only + 0 broker nodes).
+        controller:
+          replicaCount: 1
+          persistence:
+            enabled: false
+        broker:
+          replicaCount: 0
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: kafka

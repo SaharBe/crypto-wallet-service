@@ -8,12 +8,14 @@ spec:
   source:
     repoURL: 'https://charts.bitnami.com/bitnami'
     chart: kafka
-    targetRevision: 29.3.4
+    targetRevision: 31.2.1
     helm:
       values: |
         replicaCount: 1
+        kraft:
+          enabled: true
         zookeeper:
-          replicaCount: 1
+          enabled: false
         persistence:
           enabled: false
   destination:
@@ -23,4 +25,5 @@ spec:
     automated:
       prune: true
       selfHeal: true
-    createNamespace: true
+    syncOptions:
+      - CreateNamespace=true

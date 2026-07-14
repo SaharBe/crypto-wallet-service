@@ -1,21 +1,13 @@
 const express = require('express');
-const { Pool } = require('pg');
+const pool = require('./config/db');
+const { runConsumer } = require('./services/consumer');
 
 const app = express();
 const APP_PORT = process.env.PORT || 3000;
 
-const DB_CONFIG = {
-  host: process.env.DB_HOST || 'localhost',
-  port: Number(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME || 'mydb',
-  user: process.env.DB_USER || 'myuser',
-  password: process.env.DB_PASSWORD || 'mypassword',
-};
-
-const pool = new Pool(DB_CONFIG);
-
 app.get('/', async (req, res) => {
   try {
+    // Quick Postgres connection verification check
     await pool.query('SELECT 1');
 
     const pageTitle = 'Hello World — connected to PostgreSQL!';
@@ -34,6 +26,14 @@ app.get('/', async (req, res) => {
   }
 });
 
+// Liveness and Readiness probes path for Kubernetes
+app.get('/health', (req, res) => {
+  res.status(200).send({ status: 'UP', timestamp: new Date() });
+});
+
 app.listen(APP_PORT, () => {
   console.log(`Server running on http://localhost:${APP_PORT}`);
+  
+  // Start the Kafka Consumer worker in the background
+  runConsumer();
 });

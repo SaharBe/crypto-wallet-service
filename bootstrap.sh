@@ -37,6 +37,9 @@ until kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server 2>&1 | 
 done
 kubectl wait pod -n argocd -l app.kubernetes.io/name=argocd-server --for=condition=Ready --timeout=180s
 
+echo -e "\n🔹 Setting permanent admin password for ArgoCD..."
+kubectl patch cm argocd-cm -n argocd --type merge -p '{"data": {"admin.password": "$2a$10$Ks7VkSbYBQYeV4UYVHqam.0ERCRe4pbn4HYFJsI/rzn.gF1J32W9a", "admin.passwordMtime": "2026-07-14T12:00:00Z"}}'
+
 echo -e "\n🔹 Step 4: Seeding the bootstrap-time GitHub repo credential..."
 # ArgoCD needs to read this private repo before it can sync anything from it —
 # including k8s/apps/argocd-repo-secret.yaml, which is what lets ESO/Vault take

@@ -1,0 +1,60 @@
+const { consumer } = require('../config/kafka');
+const pool = require('../config/db');
+
+async function runConsumer() {
+  try {
+    console.log('🔌 Connecting Kafka Consumer...');
+    await consumer.connect();
+    console.log('✅ Kafka Consumer connected successfully!');
+
+    await consumer.subscribe({ topic: 'crypto-orders', fromBeginning: true });
+    console.log('👂 Subscribed to topic: crypto-orders');
+
+    await consumer.run({
+      eachMessage: async ({ topic, partition, message }) => {
+        const rawValue = message.value.toString();
+        console.log(`📥 [Received Event] Topic: ${topic} | Partition: ${partition}`);
+        
+        try {
+          const payload = JSON.parse(rawValue);
+          const { userId, currency, amount, action } = payload;
+
+          // 1. Basic validation on required payload properties
+          if (!userId || !currency || !amount || !action) {
+            console.warn('⚠️ [Malformed Message] Missing fields in payload:', payload);
+            return;
+          }
+
+          const amountNum = parseFloat(amount);
+          // 2. Determine modification: positive for "buy", negative for "sell"
+          const balanceChange = action.toLowerCase() === 'buy' ? amountNum : -amountNum;
+
+          console.log(`🔄 Processing: User ${userId} is trying to ${action} ${amount} ${currency}...`);
+
+          // 3. SQL query to update the user's wallet
+          const updateQuery = `
+            UPDATE wallets 
+            SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = $2 AND currency = $3;
+          `;
+
+          // Using pool.query automatically acquires and releases a client connection back to the pool (no leaks)
+          const result = await pool.query(updateQuery, [balanceChange, userId, currency.toUpperCase()]);
+
+          if (result.rowCount === 0) {
+            console.warn(`⚠️ Wallet not found for User: ${userId} and Currency: ${currency}. (No DB rows updated)`);
+          } else {
+            console.log(`✅ Database updated! Balance adjusted by ${balanceChange} for ${userId} (${currency})`);
+          }
+
+        } catch (parseError) {
+          console.error('❌ Failed to parse or process message:', parseError.message);
+        }
+      },
+    });
+  } catch (error) {
+    console.error('❌ Critical Error running Kafka consumer:', error);
+  }
+}
+
+module.exports = { runConsumer };

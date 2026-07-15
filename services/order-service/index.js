@@ -28,17 +28,26 @@ async function initKafka() {
 initKafka();
 
 app.post('/orders', async (req, res) => {
-  const { userId, coin, amount } = req.body;
+  // 1. Extract action along with the other required fields
+  const { userId, coin, amount, action } = req.body;
 
-  if (!userId || !coin || !amount) {
-    return res.status(400).send({ error: 'Missing required fields: userId, coin, or amount' });
+  // 2. Validate that all fields exist and that action is either 'buy' or 'sell'
+  if (!userId || !coin || !amount || !action) {
+    return res.status(400).send({ error: 'Missing required fields: userId, coin, amount, or action' });
+  }
+
+  const normalizedAction = action.toLowerCase();
+  if (normalizedAction !== 'buy' && normalizedAction !== 'sell') {
+    return res.status(400).send({ error: 'Invalid action. Must be either "buy" or "sell"' });
   }
 
   try {
+    // 3. Include the validated action in the event payload
     const orderEvent = {
       userId,
       coin,
       amount,
+      action: normalizedAction,
       timestamp: new Date().toISOString()
     };
 

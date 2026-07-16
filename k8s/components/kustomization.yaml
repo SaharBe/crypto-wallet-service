@@ -7,6 +7,7 @@ namespace: crypto-wallet-app
 # 2. List of all manifest files that ArgoCD should apply for this app
 resources:
   - namespace.yaml
+  - service-account.yaml
   - postgres.yaml
   - order-service.yaml
   - wallet-service.yaml

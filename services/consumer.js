@@ -47,19 +47,16 @@ async function runConsumer() {
 
           // 3. SQL query to update the user's wallet
           const updateQuery = `
-            UPDATE wallets 
-            SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = $2 AND currency = $3;
+            INSERT INTO wallets (user_id, currency, balance, updated_at)
+            VALUES ($2, $3, $1, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, currency) 
+            DO UPDATE SET balance = wallets.balance + $1, updated_at = CURRENT_TIMESTAMP;
           `;
 
           // Using pool.query automatically acquires and releases a client connection back to the pool (no leaks)
           const result = await pool.query(updateQuery, [balanceChange, userId, coin.toUpperCase()]);
-
-          if (result.rowCount === 0) {
-            console.warn(`⚠️ Wallet not found for User: ${userId} and Coin: ${coin}. (No DB rows updated)`);
-          } else {
-            console.log(`✅ Database updated! Balance adjusted by ${balanceChange} for ${userId} (${coin})`);
-          }
+          
+          console.log(`✅ Database synchronized! Balance adjusted by ${balanceChange} for ${userId} (${coin})`);
 
         } catch (parseError) {
           console.error('❌ Failed to parse or process message:', parseError.message);

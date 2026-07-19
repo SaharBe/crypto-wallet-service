@@ -21,12 +21,21 @@ async function runConsumer() {
           if (typeof payload === 'string') {
             payload = JSON.parse(payload);
           }
-          
+
           const { userId, coin, amount, action } = payload;
 
           // 1. Basic validation on required payload properties
           if (!userId || !coin || !amount || !action) {
-            console.warn('⚠️ [Malformed Message] Missing fields in payload:', payload);
+            console.warn('⚠️ [Malformed Message] Detailed check:', {
+              payload,
+              extracted: { userId, coin, amount, action },
+              types: { 
+                userId: typeof userId, 
+                coin: typeof coin, 
+                amount: typeof amount, 
+                action: typeof action 
+              }
+            });
             return;
           }
 

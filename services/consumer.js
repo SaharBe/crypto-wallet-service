@@ -16,7 +16,12 @@ async function runConsumer() {
         console.log(`📥 [Received Event] Topic: ${topic} | Partition: ${partition}`);
         
         try {
-          const payload = JSON.parse(rawValue);
+          let payload = JSON.parse(rawValue);
+
+          if (typeof payload === 'string') {
+            payload = JSON.parse(payload);
+          }
+          
           const { userId, coin, amount, action } = payload;
 
           // 1. Basic validation on required payload properties

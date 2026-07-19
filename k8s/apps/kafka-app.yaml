@@ -38,10 +38,15 @@ spec:
           replicaCount: 1
           persistence:
             enabled: false
-          extraConfig: |
-            offsets.topic.replication.factor=1
-            transaction.state.log.replication.factor=1
-            transaction.state.log.min.isr=1
+          # NOTE: this chart version has no `extraConfig` key - it's silently
+          # ignored by Helm (unknown values keys don't error), which is why
+          # these settings were never actually reaching server.properties.
+          # The real key is `overrideConfiguration` (a map, not a raw string
+          # block). Confirmed via `helm template` before committing.
+          overrideConfiguration:
+            offsets.topic.replication.factor: "1"
+            transaction.state.log.replication.factor: "1"
+            transaction.state.log.min.isr: "1"
         broker:
           replicaCount: 0
   destination:

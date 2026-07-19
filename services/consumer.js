@@ -17,10 +17,10 @@ async function runConsumer() {
         
         try {
           const payload = JSON.parse(rawValue);
-          const { userId, currency, amount, action } = payload;
+          const { userId, coin, amount, action } = payload;
 
           // 1. Basic validation on required payload properties
-          if (!userId || !currency || !amount || !action) {
+          if (!userId || !coin || !amount || !action) {
             console.warn('⚠️ [Malformed Message] Missing fields in payload:', payload);
             return;
           }
@@ -29,22 +29,22 @@ async function runConsumer() {
           // 2. Determine modification: positive for "buy", negative for "sell"
           const balanceChange = action.toLowerCase() === 'buy' ? amountNum : -amountNum;
 
-          console.log(`🔄 Processing: User ${userId} is trying to ${action} ${amount} ${currency}...`);
+          console.log(`🔄 Processing: User ${userId} is trying to ${action} ${amount} ${coin}...`);
 
           // 3. SQL query to update the user's wallet
           const updateQuery = `
             UPDATE wallets 
             SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = $2 AND currency = $3;
+            WHERE user_id = $2 AND coin = $3;
           `;
 
           // Using pool.query automatically acquires and releases a client connection back to the pool (no leaks)
-          const result = await pool.query(updateQuery, [balanceChange, userId, currency.toUpperCase()]);
+          const result = await pool.query(updateQuery, [balanceChange, userId, coin.toUpperCase()]);
 
           if (result.rowCount === 0) {
-            console.warn(`⚠️ Wallet not found for User: ${userId} and Currency: ${currency}. (No DB rows updated)`);
+            console.warn(`⚠️ Wallet not found for User: ${userId} and Coin: ${coin}. (No DB rows updated)`);
           } else {
-            console.log(`✅ Database updated! Balance adjusted by ${balanceChange} for ${userId} (${currency})`);
+            console.log(`✅ Database updated! Balance adjusted by ${balanceChange} for ${userId} (${coin})`);
           }
 
         } catch (parseError) {

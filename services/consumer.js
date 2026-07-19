@@ -49,7 +49,7 @@ async function runConsumer() {
           const updateQuery = `
             UPDATE wallets 
             SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = $2 AND coin = $3;
+            WHERE user_id = $2 AND currency = $3;
           `;
 
           // Using pool.query automatically acquires and releases a client connection back to the pool (no leaks)

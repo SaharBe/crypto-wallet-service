@@ -23,7 +23,7 @@ spec:
             - name: KAFKA_BROKERS
               value: "kafka-controller-0.kafka-controller-headless.kafka.svc.cluster.local:9092"
             - name: DB_HOST
-              value: "postgres-db.default.svc.cluster.local"
+              value: "postgres-db.rypto-wallet-app.svc.cluster.local"
             - name: DB_USER
               value: "myuser"
             - name: DB_PASSWORD

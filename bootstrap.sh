@@ -27,24 +27,17 @@ terraform -chdir=terraform/infra apply --auto-approve
 echo -e "\n🔹 Step 2: Connecting local terminal to EKS Cluster..."
 aws eks update-kubeconfig --region us-east-1 --name crypto-wallet-eks-cluster
 
-echo -e "\n🔹 Step 2.5: Building and pushing initial Application Images to ECR..."
-# 1. משיכת ה-Account ID והתחברות ל-ECR Registry
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
-ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
-
-echo "🔐 Logging into ECR..."
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-# 2. בנייה לוקאלית ודחיפה של ה-Images (מניח שתיקיות הקוד נמצאות בנתיב הנוכחי)
-SERVICES=("order-service" "wallet-service")
+eSERVICES=("order-service" "wallet-service")
 
 for SERVICE in "${SERVICES[@]}"; do
-  echo "📦 Building image for $SERVICE..."
-  docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./${SERVICE}"
+  echo "📦 Building image for $SERVICE from ./services/$SERVICE..."
+  
+  docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./services/${SERVICE}"
   
   echo "🚀 Pushing $SERVICE to ECR..."
   docker push "${ECR_REGISTRY}/${SERVICE}:latest"
 done
+
 echo "✅ Initial images are live in ECR!"
 
 echo -e "\n🔹 Step 3: Installing ArgoCD..."
@@ -88,9 +81,16 @@ EOF
 echo -e "\n🔹 Step 5: Registering the App-of-Apps..."
 kubectl apply -f k8s/root-app.yaml
 
-echo -e "\n🔹 Step 6: Waiting for ArgoCD to finish syncing all infrastructure and applications..."
-# הוספנו את kafka-app וממתינים שכולם יהיו בריאים לחלוטין לפני הגדרות ה-Secrets
-for app in vault external-secrets kafka-app crypto-wallet-app; do
+echo -e "\n🔹 Step 6: Waiting for ArgoCD to finish syncing Infrastructure apps..."
+
+INFRA_APPS=("vault" "external-secrets" "kafka")
+
+for app in "${INFRA_APPS[@]}"; do
+  echo "⌛ Waiting for '$app' Application resource to be created by ArgoCD..."
+  until kubectl get application "$app" -n argocd >/dev/null 2>&1; do
+    sleep 3
+  done
+
   echo "⌛ Waiting for '$app' to become Synced/Healthy..."
   kubectl wait application "$app" -n argocd \
     --for=jsonpath='{.status.sync.status}'=Synced \
@@ -116,6 +116,14 @@ echo "✅ Vault configured successfully via Terraform!"
 
 kill "$VAULT_PF_PID" 2>/dev/null || true
 trap - EXIT
+
+echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app to consume secrets and become Healthy..."
+kubectl wait application "crypto-wallet-app" -n argocd \
+  --for=jsonpath='{.status.sync.status}'=Synced \
+  --timeout=300s
+kubectl wait application "crypto-wallet-app" -n argocd \
+  --for=jsonpath='{.status.health.status}'=Healthy \
+  --timeout=300s
 
 echo -e "\n=================================================="
 echo "✅ Bootstrap script completed successfully!"

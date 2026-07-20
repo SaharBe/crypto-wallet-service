@@ -22,8 +22,8 @@ module "crypto_app" {
   auth_backend                     = vault_auth_backend.kubernetes.path
   policy_name                      = "crypto-app-policy"
   role_name                        = "crypto-app-role"
-  bound_service_account_names      = ["crypto-sa"]
-  bound_service_account_namespaces = ["crypto-wallet-app"]
+  bound_service_account_names      = ["*"]
+  bound_service_account_namespaces = ["crypto-wallet-app", "external-secrets", "argocd"]
 
   # server.dev.enabled=true in the Vault Helm values already pre-mounts
   # "secret/" as KV v2 — creating it again here would error.

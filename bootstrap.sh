@@ -27,6 +27,26 @@ terraform -chdir=terraform/infra apply --auto-approve
 echo -e "\n🔹 Step 2: Connecting local terminal to EKS Cluster..."
 aws eks update-kubeconfig --region us-east-1 --name crypto-wallet-eks-cluster
 
+echo -e "\n🔹 Step 2.5: Building and pushing initial Application Images to ECR..."
+# 1. משיכת ה-Account ID והתחברות ל-ECR Registry
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
+
+echo "🔐 Logging into ECR..."
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+# 2. בנייה לוקאלית ודחיפה של ה-Images (מניח שתיקיות הקוד נמצאות בנתיב הנוכחי)
+SERVICES=("order-service" "wallet-service")
+
+for SERVICE in "${SERVICES[@]}"; do
+  echo "📦 Building image for $SERVICE..."
+  docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./${SERVICE}"
+  
+  echo "🚀 Pushing $SERVICE to ECR..."
+  docker push "${ECR_REGISTRY}/${SERVICE}:latest"
+done
+echo "✅ Initial images are live in ECR!"
+
 echo -e "\n🔹 Step 3: Installing ArgoCD..."
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml || true
@@ -50,10 +70,6 @@ echo -e "\n🔹 Getting permanent admin password for ArgoCD:"
 kubectl get secret argocd-secret -n argocd -o yaml
 
 echo -e "\n🔹 Step 4: Seeding the bootstrap-time GitHub repo credential..."
-# ArgoCD needs to read this private repo before it can sync anything from it —
-# including k8s/apps/argocd-repo-secret.yaml, which is what lets ESO/Vault take
-# over managing this same Secret afterwards. This bootstrap copy is never
-# written to disk as a manifest and never committed.
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Secret
@@ -72,33 +88,9 @@ EOF
 echo -e "\n🔹 Step 5: Registering the App-of-Apps..."
 kubectl apply -f k8s/root-app.yaml
 
-echo -e "\n🔹 Step 6: Configuring Vault via Terraform (auth, policy, roles, secrets)..."
-echo "⌛ Waiting for ArgoCD to deploy the Vault pod..."
-until kubectl get pods -n vault -l app.kubernetes.io/name=vault,component=server 2>&1 | grep -q -v "No resources found"; do
-  sleep 2
-done
-kubectl wait pod -n vault \
-  -l app.kubernetes.io/name=vault,component=server \
-  --for=condition=Ready \
-  --timeout=180s
-
-echo "🔌 Port-forwarding Vault so Terraform can reach it from outside the cluster..."
-kubectl port-forward svc/vault -n vault 8200:8200 > /dev/null 2>&1 &
-VAULT_PF_PID=$!
-trap 'kill $VAULT_PF_PID 2>/dev/null || true' EXIT
-until curl -s -o /dev/null http://127.0.0.1:8200/v1/sys/health; do
-  sleep 2
-done
-
-terraform -chdir=terraform/vault-config init -backend-config=backend.hcl -input=false
-terraform -chdir=terraform/vault-config apply --auto-approve
-echo "✅ Vault configured"
-
-kill "$VAULT_PF_PID" 2>/dev/null || true
-trap - EXIT
-
-echo -e "\n🔹 Step 7: Waiting for ArgoCD to finish syncing all applications..."
-for app in vault external-secrets crypto-wallet-app; do
+echo -e "\n🔹 Step 6: Waiting for ArgoCD to finish syncing all infrastructure and applications..."
+# הוספנו את kafka-app וממתינים שכולם יהיו בריאים לחלוטין לפני הגדרות ה-Secrets
+for app in vault external-secrets kafka-app crypto-wallet-app; do
   echo "⌛ Waiting for '$app' to become Synced/Healthy..."
   kubectl wait application "$app" -n argocd \
     --for=jsonpath='{.status.sync.status}'=Synced \
@@ -107,6 +99,23 @@ for app in vault external-secrets crypto-wallet-app; do
     --for=jsonpath='{.status.health.status}'=Healthy \
     --timeout=300s
 done
+
+echo -e "\n🔹 Step 7: Configuring Vault via Terraform (auth, policy, roles, secrets)..."
+echo "🔌 Port-forwarding Vault so Terraform can reach it from outside the cluster..."
+kubectl port-forward svc/vault -n vault 8200:8200 > /dev/null 2>&1 &
+VAULT_PF_PID=$!
+trap 'kill $VAULT_PF_PID 2>/dev/null || true' EXIT
+
+until curl -s -o /dev/null http://127.0.0.1:8200/v1/sys/health; do
+  sleep 2
+done
+
+terraform -chdir=terraform/vault-config init -backend-config=backend.hcl -input=false
+terraform -chdir=terraform/vault-config apply --auto-approve
+echo "✅ Vault configured successfully via Terraform!"
+
+kill "$VAULT_PF_PID" 2>/dev/null || true
+trap - EXIT
 
 echo -e "\n=================================================="
 echo "✅ Bootstrap script completed successfully!"

@@ -26,6 +26,15 @@ spec:
           value: "mydb"
         ports:
         - containerPort: 5432
+        # 1. Mount the initialization directory into the container
+        volumeMounts:
+        - name: postgres-init-volume
+          mountPath: /docker-entrypoint-initdb.d
+      # 2. Define the volume using the ConfigMap you created
+      volumes:
+      - name: postgres-init-volume
+        configMap:
+          name: postgres-init-db-script
 ---
 apiVersion: v1
 kind: Service

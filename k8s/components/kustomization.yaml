@@ -9,6 +9,7 @@ resources:
   - namespace.yaml
   - service-account.yaml
   - postgres.yaml
+  - postgres-init-configmap.yaml
   - order-service.yaml
   - wallet-service.yaml
   - external-secret.yaml

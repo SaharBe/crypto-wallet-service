@@ -23,7 +23,7 @@ module "crypto_app" {
   policy_name                      = "crypto-app-policy"
   role_name                        = "crypto-app-role"
   bound_service_account_names      = ["crypto-sa"]
-  bound_service_account_namespaces = ["default"]
+  bound_service_account_namespaces = ["crypto-wallet-app"]
 
   # server.dev.enabled=true in the Vault Helm values already pre-mounts
   # "secret/" as KV v2 — creating it again here would error.

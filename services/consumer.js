@@ -1,14 +1,48 @@
-const { consumer } = require('../config/kafka');
+// 1. Import kafka instance alongside the consumer to use the Admin API
+const { consumer, kafka } = require('../config/kafka');
 const pool = require('../config/db');
+
+// Helper function to ensure the topic exists before subscribing
+async function ensureTopicExists(topicName) {
+  const admin = kafka.admin();
+  console.log(`🔍 Checking if topic "${topicName}" exists...`);
+  try {
+    await admin.connect();
+    
+    const topics = await admin.listTopics();
+    if (!topics.includes(topicName)) {
+      console.log(`✨ Topic "${topicName}" not found. Creating it dynamically...`);
+      await admin.createTopics({
+        topics: [{ 
+          topic: topicName, 
+          numPartitions: 3,     // 3 partitions as configured previously
+          replicationFactor: 1  // Local cluster, single replica is sufficient
+        }],
+      });
+      console.log(`✅ Topic "${topicName}" created successfully!`);
+    } else {
+      console.log(`✅ Topic "${topicName}" already exists.`);
+    }
+  } catch (err) {
+    console.error(`❌ Failed to check/create topic "${topicName}":`, err.message);
+  } finally {
+    await admin.disconnect();
+  }
+}
 
 async function runConsumer() {
   try {
+    const topicName = 'crypto-orders';
+
+    // 2. Verify and create the topic dynamically before the consumer connects
+    await ensureTopicExists(topicName);
+
     console.log('🔌 Connecting Kafka Consumer...');
     await consumer.connect();
     console.log('✅ Kafka Consumer connected successfully!');
 
-    await consumer.subscribe({ topic: 'crypto-orders', fromBeginning: true });
-    console.log('👂 Subscribed to topic: crypto-orders');
+    await consumer.subscribe({ topic: topicName, fromBeginning: true });
+    console.log(`👂 Subscribed to topic: ${topicName}`);
 
     await consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
@@ -45,7 +79,7 @@ async function runConsumer() {
 
           console.log(`🔄 Processing: User ${userId} is trying to ${action} ${amount} ${coin}...`);
 
-          // 3. SQL query to update the user's wallet
+          // 3. SQL query to update the user's wallet using the UPSERT logic
           const updateQuery = `
             INSERT INTO wallets (user_id, currency, balance, updated_at)
             VALUES ($2, $3, $1, CURRENT_TIMESTAMP)

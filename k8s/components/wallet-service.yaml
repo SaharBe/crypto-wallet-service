@@ -25,9 +25,15 @@ spec:
             - name: DB_HOST
               value: "postgres-service.crypto-wallet-app.svc.cluster.local"
             - name: DB_USER
-              value: "myuser"
+              valueFrom:
+                secretKeyRef:
+                  name: crypto-db-secret
+                  key: DB_USER
             - name: DB_PASSWORD
-              value: "mypassword"
+              valueFrom:
+                secretKeyRef:
+                  name: crypto-db-secret
+                  key: DB_PASSWORD
             - name: DB_NAME
               value: "mydb"
             - name: DB_PORT

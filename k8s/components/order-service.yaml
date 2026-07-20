@@ -27,6 +27,16 @@ spec:
           value: "3000"
         - name: KAFKA_BROKERS
           value: "kafka-controller-0.kafka-controller-headless.kafka.svc.cluster.local:9092"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: crypto-db-secret
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: crypto-db-secret
+              key: DB_PASSWORD
         
         livenessProbe:
           httpGet:

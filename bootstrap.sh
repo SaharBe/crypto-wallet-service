@@ -118,6 +118,8 @@ kill "$VAULT_PF_PID" 2>/dev/null || true
 trap - EXIT
 
 echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app to consume secrets and become Healthy..."
+kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
+
 kubectl wait application "crypto-wallet-app" -n argocd \
   --for=jsonpath='{.status.sync.status}'=Synced \
   --timeout=300s

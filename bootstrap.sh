@@ -27,7 +27,7 @@ terraform -chdir=terraform/infra apply --auto-approve
 echo -e "\n🔹 Step 2: Connecting local terminal to EKS Cluster..."
 aws eks update-kubeconfig --region us-east-1 --name crypto-wallet-eks-cluster
 
-eSERVICES=("order-service" "wallet-service")
+SERVICES=("order-service" "wallet-service")
 
 for SERVICE in "${SERVICES[@]}"; do
   echo "📦 Building image for $SERVICE from ./services/$SERVICE..."

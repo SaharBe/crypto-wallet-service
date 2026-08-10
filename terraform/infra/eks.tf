@@ -21,6 +21,7 @@ module "eks" {
 
       instance_types = ["t3.medium"]
       capacity_type  = "ON_DEMAND"
+      ami_type = "AL2023_x86_64_STANDARD"
     }
   }
 

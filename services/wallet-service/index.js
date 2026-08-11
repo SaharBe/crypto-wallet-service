@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('./config/db');
-const { runConsumer } = require('./services/consumer');
+const { runConsumer } = require('./consumer');
 
 const app = express();
 const APP_PORT = process.env.PORT || 3000;

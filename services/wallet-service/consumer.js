@@ -1,6 +1,6 @@
 // 1. Import kafka instance alongside the consumer to use the Admin API
-const { consumer, kafka } = require('../config/kafka');
-const pool = require('../config/db');
+const { consumer, kafka } = require('./config/kafka');
+const pool = require('./config/db');
 
 // Helper function to ensure the topic exists before subscribing
 async function ensureTopicExists(topicName) {

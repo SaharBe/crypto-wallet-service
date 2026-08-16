@@ -69,3 +69,23 @@ resource "vault_kv_secret_v2" "grafana_credentials" {
     }
   )
 }
+
+module "monitoring" {
+  source     = "../modules/vault-config"
+  depends_on = [vault_kubernetes_auth_backend_config.this]
+
+  auth_backend                     = vault_auth_backend.kubernetes.path
+  policy_name                      = "monitoring-policy"
+  role_name                        = "monitoring-role"
+  bound_service_account_names      = ["*"]
+  bound_service_account_namespaces = ["monitoring", "crypto-wallet-app"]
+
+  manage_kv_mount = false
+
+  secrets = {
+    "monitoring/grafana" = {
+      admin-user     = "admin"
+      admin-password = var.grafana_admin_password
+    }
+  }
+}

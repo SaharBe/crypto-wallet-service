@@ -56,3 +56,16 @@ module "argocd_repo" {
     }
   }
 }
+
+resource "vault_kv_secret_v2" "grafana_credentials" {
+  mount               = "secret"
+  name                = "monitoring/grafana"
+  cas                 = 1
+  delete_all_versions = true
+  data_json = jsonencode(
+    {
+      admin-user     = "admin"
+      admin-password = var.grafana_admin_password
+    }
+  )
+}

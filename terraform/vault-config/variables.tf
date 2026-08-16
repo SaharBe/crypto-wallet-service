@@ -39,3 +39,10 @@ variable "github_pat" {
   type        = string
   sensitive   = true
 }
+
+variable "grafana_admin_password" {
+  description = "The admin password for Grafana dashboard"
+  type        = string
+  sensitive   = true
+  default     = "Admin10!"
+}

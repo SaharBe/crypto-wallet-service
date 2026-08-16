@@ -57,19 +57,6 @@ module "argocd_repo" {
   }
 }
 
-resource "vault_kv_secret_v2" "grafana_credentials" {
-  mount               = "secret"
-  name                = "monitoring/grafana"
-  cas                 = 1
-  delete_all_versions = true
-  data_json = jsonencode(
-    {
-      admin-user     = "admin"
-      admin-password = var.grafana_admin_password
-    }
-  )
-}
-
 module "monitoring" {
   source     = "../modules/vault-config"
   depends_on = [vault_kubernetes_auth_backend_config.this]

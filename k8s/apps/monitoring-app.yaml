@@ -3,6 +3,23 @@ kind: Application
 metadata:
   name: monitoring-stack
   namespace: argocd
+  annotations:
+    # Grafana's Deployment (via existingSecret: grafana-admin-credentials)
+    # needs that Secret to exist before its pod can start. The Secret comes
+    # from k8s/apps/grafana-secret.yaml's ExternalSecret, which lives at the
+    # default wave (0) alongside this Application's own siblings — putting
+    # this Application in a later wave makes ArgoCD create it only after
+    # that ExternalSecret object exists, giving ESO a head start instead of
+    # racing Grafana's pod creation against it.
+    #
+    # This narrows but doesn't close the race: Vault's monitoring-role
+    # (created by `terraform apply` in terraform/vault-config, a bootstrap.sh
+    # shell step outside ArgoCD's sync) may still not exist yet when this
+    # wave runs. If so, ESO retries with backoff and the Secret appears a
+    # little later — bootstrap.sh Step 8 restarts the Grafana deployment and
+    # waits on this Application's health after that terraform apply
+    # completes, same as it already does for crypto-wallet-app.
+    argocd.argoproj.io/sync-wave: "1"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

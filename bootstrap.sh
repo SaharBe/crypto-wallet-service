@@ -120,15 +120,23 @@ echo "✅ Vault configured successfully via Terraform!"
 kill "$VAULT_PF_PID" 2>/dev/null || true
 trap - EXIT
 
-echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app to consume secrets and become Healthy..."
+echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app and monitoring-stack to consume secrets and become Healthy..."
 kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
+# monitoring-stack's Grafana pod can only pick up grafana-admin-credentials
+# after ESO has synced it, which needed the monitoring-role this terraform
+# apply just created in Vault — same restart-after-secrets pattern as
+# crypto-wallet-app above. Deployment name/namespace may not exist yet on a
+# very fresh cluster if ArgoCD hasn't gotten to that sync wave, hence || true.
+kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
 
-kubectl wait application "crypto-wallet-app" -n argocd \
-  --for=jsonpath='{.status.sync.status}'=Synced \
-  --timeout=300s
-kubectl wait application "crypto-wallet-app" -n argocd \
-  --for=jsonpath='{.status.health.status}'=Healthy \
-  --timeout=300s
+for app in "crypto-wallet-app" "monitoring-stack"; do
+  kubectl wait application "$app" -n argocd \
+    --for=jsonpath='{.status.sync.status}'=Synced \
+    --timeout=300s
+  kubectl wait application "$app" -n argocd \
+    --for=jsonpath='{.status.health.status}'=Healthy \
+    --timeout=300s
+done
 
 echo -e "\n=================================================="
 echo "✅ Bootstrap script completed successfully!"

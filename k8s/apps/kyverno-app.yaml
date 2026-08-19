@@ -15,6 +15,28 @@ spec:
       values: |
         admissionController:
           replicas: 1
+        # Chart 3.2.0 pins every one of its bitnami/kubectl-based hook/cronjob
+        # images to tag 1.28.5, which Bitnami has since removed from Docker Hub
+        # as part of their "Bitnami Secure Images" migration (confirmed: the
+        # 1.28.5 tag 404s; `latest` is still published, and the chart's own
+        # values.yaml comment already documents "Defaults to `latest` if
+        # omitted" as the intended fallback) — hence the ImagePullBackOff/
+        # ErrImagePull on the cleanup CronJob pods and the post-upgrade hook Job.
+        # All four bitnami/kubectl:1.28.5 references in the chart's values.yaml
+        # (verified via `helm pull kyverno/kyverno --version 3.2.0 --untar`):
+        cleanupJobs:
+          admissionReports:
+            image:
+              tag: latest
+          clusterAdmissionReports:
+            image:
+              tag: latest
+        policyReportsCleanup:
+          image:
+            tag: latest
+        webhooksCleanup:
+          image:
+            tag: latest
   destination:
     server: https://kubernetes.default.svc
     namespace: kyverno

@@ -3,19 +3,6 @@ kind: Application
 metadata:
   name: kyverno
   namespace: argocd
-  annotations:
-    # Unrelated to monitoring/grafana, but must NOT share wave 0 with them:
-    # monitoring-stack (wave 1, see monitoring-app.yaml) only gets created
-    # once every wave-0 resource is Synced+Healthy, and ArgoCD's automated
-    # self-heal does not keep retrying a sync that has already failed for
-    # the currently-targeted revision ("Skipping auto-sync: failed previous
-    # sync attempt ... will not retry"). If kyverno stayed in wave 0 and its
-    # own sync failed (see the CRD-size issue below), monitoring-stack would
-    # never be created on a clean bootstrap and Step 8's wait-for-existence
-    # loop would hang indefinitely. Pushing it to a later wave keeps its
-    # fate from blocking monitoring-stack's, whether or not kyverno itself
-    # is healthy.
-    argocd.argoproj.io/sync-wave: "2"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -37,16 +24,5 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      # Kyverno's clusterpolicies.kyverno.io/policies.kyverno.io CRDs render
-      # to ~1.24MB each (verified via `helm template kyverno/kyverno
-      # --version 3.2.0`), well past Kubernetes' 262144-byte annotation
-      # limit — kubectl.kubernetes.io/last-applied-configuration embeds the
-      # whole object as one annotation value, so client-side apply can never
-      # write it. ServerSideApply=true is the standard fix for this class of
-      # error and IS in effect here (confirmed via the live spec), but as of
-      # this repo's ArgoCD v3.5.1 + kyverno chart 3.2.0 the sync still fails
-      # with the identical "metadata.annotations: Too long" error on just
-      # these two CRDs — left in place since it's still necessary even
-      # though it isn't sufficient here; the remaining failure is unsolved
-      # and tracked separately from the monitoring/grafana bootstrap fix.
       - ServerSideApply=true
+      - RespectIgnoreDifferences=true

@@ -121,15 +121,44 @@ kill "$VAULT_PF_PID" 2>/dev/null || true
 trap - EXIT
 
 echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app and monitoring-stack to consume secrets and become Healthy..."
-kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
-# monitoring-stack's Grafana pod can only pick up grafana-admin-credentials
-# after ESO has synced it, which needed the monitoring-role this terraform
-# apply just created in Vault — same restart-after-secrets pattern as
-# crypto-wallet-app above. Deployment name/namespace may not exist yet on a
-# very fresh cluster if ArgoCD hasn't gotten to that sync wave, hence || true.
-kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
-
+# monitoring-stack syncs at wave "1" (see k8s/apps/monitoring-app.yaml), so
+# root-app only creates its Application resource once wave 0 — which
+# includes crypto-wallet-app — is itself Synced/Healthy. crypto-wallet-app's
+# own health depends on the terraform apply above too, so on a clean
+# bootstrap neither Application is guaranteed to exist by the time this step
+# starts. Wait for each to actually be created before `kubectl wait`-ing on
+# it, same guard Step 6 uses for INFRA_APPS — without it, a fresh cluster
+# hits "applications.argoproj.io \"monitoring-stack\" not found".
 for app in "crypto-wallet-app" "monitoring-stack"; do
+  echo "⌛ Waiting for '$app' Application resource to be created by ArgoCD..."
+  # Bounded, unlike Step 6's equivalent loop: this Application only appears
+  # once wave 0 fully succeeds, which includes apps unrelated to this fix
+  # (e.g. kyverno) that could stall for reasons of their own. Fail loudly
+  # after 5 minutes instead of hanging bootstrap.sh forever.
+  WAIT_ELAPSED=0
+  until kubectl get application "$app" -n argocd >/dev/null 2>&1; do
+    if [ "$WAIT_ELAPSED" -ge 300 ]; then
+      echo "❌ Timed out after 300s waiting for Application '$app' to be created by ArgoCD."
+      echo "   Check 'kubectl get applications -n argocd' — a wave-0 app may be stuck failing"
+      echo "   and blocking wave 1 (root-application won't retry a failed sync on its own)."
+      exit 1
+    fi
+    sleep 3
+    WAIT_ELAPSED=$((WAIT_ELAPSED + 3))
+  done
+
+  # Restart the app's Deployments once its Application object exists, so
+  # pods that came up before ESO synced their secret pick it up now rather
+  # than waiting on kubelet's own retry timing. Namespace/deployment name
+  # may still not exist yet even after the Application resource does (its
+  # own sync could still be in flight), hence || true.
+  if [ "$app" = "crypto-wallet-app" ]; then
+    kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
+  else
+    kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
+  fi
+
+  echo "⌛ Waiting for '$app' to become Synced/Healthy..."
   kubectl wait application "$app" -n argocd \
     --for=jsonpath='{.status.sync.status}'=Synced \
     --timeout=300s

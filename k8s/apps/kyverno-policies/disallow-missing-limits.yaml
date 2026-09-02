@@ -20,6 +20,14 @@ spec:
         - resources:
             kinds:
               - Pod
+      exclude:
+        any:
+        - resources:
+            namespaces:
+              - kube-system
+              - argocd
+              - kyverno
+              - monitoring
       validate:
         message: "CPU and memory limits are required for all containers."
         pattern:

@@ -78,6 +78,14 @@ app.get('/health', (req, res) => {
   res.send({ status: 'UP' });
 });
 
+app.get('/', (req, res) => {
+  res.status(200).json({
+    service: 'order-service',
+    status: 'operational',
+    message: 'Order Service API is active'
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Order Service listening on port ${PORT}`);
 });

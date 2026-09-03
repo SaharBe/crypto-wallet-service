@@ -19,6 +19,13 @@ spec:
         - name: wallet-service
           image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/wallet-service:latest
           imagePullPolicy: Always
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
           env:
             - name: KAFKA_BROKERS
               value: "kafka-controller-0.kafka-controller-headless.kafka.svc.cluster.local:9092"

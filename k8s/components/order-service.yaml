@@ -19,6 +19,13 @@ spec:
       - name: order-service
         image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/order-service:latest
         imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
         ports:
         - containerPort: 3000
         

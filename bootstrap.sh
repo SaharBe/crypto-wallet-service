@@ -45,6 +45,11 @@ echo "✅ Initial images are live in ECR!"
 
 echo -e "\n🔹 Step 3: Installing ArgoCD..."
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+# Install ApplicationSet CRDs first to prevent argocd-applicationset-controller CrashLoop (using server-side apply to avoid size limit issues)
+kubectl apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+
+# Apply main ArgoCD manifests
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml || true
 
 echo "⌛ Waiting for the ArgoCD API server to become Ready..."

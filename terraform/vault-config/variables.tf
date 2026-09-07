@@ -28,6 +28,12 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "repo_url" {
+  description = "Canonical Git repository URL for this platform. Written to Vault at secret/argocd-repo-creds (key \"url\") so ESO can populate it in ArgoCD's repository Secret — see k8s/apps/argocd-repo-secret.yaml. Passed as TF_VAR_repo_url from secrets.env by bootstrap.sh; the default is the fallback single source of truth."
+  type        = string
+  default     = "https://github.com/SaharBe/crypto-wallet-service.git"
+}
+
 variable "github_username" {
   description = "GitHub username ESO will expose to ArgoCD's repository credentials Secret."
   type        = string

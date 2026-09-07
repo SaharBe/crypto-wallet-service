@@ -14,11 +14,20 @@ if [ ! -f "secrets.env" ]; then
 fi
 # shellcheck disable=SC1091
 source secrets.env
+
+# Single source of truth for the platform's Git repo URL (secrets.env).
+: "${REPO_URL:?REPO_URL must be set in secrets.env — see secrets.env.example}"
+if ! command -v envsubst >/dev/null 2>&1; then
+  echo "❌ envsubst not found. Install the 'gettext' package (provides envsubst)."
+  exit 1
+fi
+
 export TF_VAR_vault_token="$VAULT_TOKEN"
 export TF_VAR_db_username="$DB_USERNAME"
 export TF_VAR_db_password="$DB_PASSWORD"
 export TF_VAR_github_username="$GITHUB_USERNAME"
 export TF_VAR_github_pat="$GITHUB_PAT"
+export TF_VAR_repo_url="$REPO_URL"
 
 echo -e "\n🔹 Step 1: Provisioning AWS infrastructure via Terraform..."
 terraform -chdir=terraform/infra init -backend-config=backend.hcl -input=false
@@ -81,13 +90,16 @@ metadata:
     argocd.argoproj.io/secret-type: repository
 stringData:
   type: git
-  url: "https://github.com/SaharBe/crypto-wallet-service.git"
+  url: "$REPO_URL"
   username: "$GITHUB_USERNAME"
   password: "$GITHUB_PAT"
 EOF
 
 echo -e "\n🔹 Step 5: Registering the App-of-Apps..."
-kubectl apply -f k8s/root-app.yaml
+# root-app.yaml carries ${REPO_URL} as a placeholder — rendered here rather
+# than hardcoded. It's applied imperatively (not synced by ArgoCD), so this
+# is the one place it needs substituting.
+envsubst '${REPO_URL}' < k8s/root-app.yaml | kubectl apply -f -
 
 echo -e "\n🔹 Step 6: Waiting for ArgoCD to finish syncing Infrastructure apps..."
 

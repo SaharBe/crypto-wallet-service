@@ -51,6 +51,7 @@ module "argocd_repo" {
 
   secrets = {
     "argocd-repo-creds" = {
+      url      = var.repo_url
       username = var.github_username
       password = var.github_pat
     }

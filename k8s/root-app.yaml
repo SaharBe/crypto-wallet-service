@@ -8,7 +8,11 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/SaharBe/crypto-wallet-service.git'
+    # ${REPO_URL} is substituted by bootstrap.sh (`envsubst`) before this
+    # manifest is applied — see secrets.env for the canonical value. This
+    # file is applied imperatively, never synced by ArgoCD, so envsubst is
+    # sufficient here.
+    repoURL: '${REPO_URL}'
     targetRevision: HEAD
     path: k8s/apps
   destination:

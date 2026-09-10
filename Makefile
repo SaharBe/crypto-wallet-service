@@ -2,14 +2,24 @@
 # Root Makefile — developer-operations entrypoint for the crypto-wallet IDP.
 #
 # Run every target from the repo root. Plain `make` (or `make help`) lists
-# the targets. `up` and `build` expect secrets.env to be sourced first, e.g.:
+# the targets.
 #
-#     source secrets.env && make build
+# secrets.env is picked up automatically when it exists — no need to
+# `source secrets.env` first. It is shell syntax (`export FOO="bar"`, plus
+# `$VAR` cross-references), so recipes `.`-source it in the shell rather than
+# Make `include`-ing it: a bare `include` keeps the literal quotes (which
+# then break `docker login` / `docker build -t`) and mis-expands the `$VAR`
+# references (`$REPO_URL` -> `EPO_URL`, etc.).
 # ─────────────────────────────────────────────────────────────────────────────
 
 TF_INFRA_DIR := terraform/infra
 AWS_REGION   ?= us-east-1
 SERVICES     := order-service wallet-service
+SECRETS_ENV  := secrets.env
+
+# Source secrets.env into the recipe shell when present; no-op when absent
+# (targets that need a specific variable assert on it explicitly — see build).
+LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
 .PHONY: help up down build
@@ -28,7 +38,8 @@ down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
 	terraform -chdir=$(TF_INFRA_DIR) destroy --auto-approve
 
 build: ## Build & push Docker images for order-service and wallet-service to ECR
-	@: $${ECR_REGISTRY:?ECR_REGISTRY not set — run 'source secrets.env' first}; \
+	@$(LOAD_SECRETS); \
+	: "$${ECR_REGISTRY:?not set — add it to $(SECRETS_ENV) (copy $(SECRETS_ENV).example) or export it before running make}"; \
 	echo "🔑 Logging in to AWS ECR ($(AWS_REGION))..."; \
 	aws ecr get-login-password --region $(AWS_REGION) \
 		| docker login --username AWS --password-stdin "$${ECR_REGISTRY}"; \

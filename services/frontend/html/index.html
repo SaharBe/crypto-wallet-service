@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Wallet Console</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%99%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">🪙</span>
+      <div>
+        <h1>Crypto Wallet Console</h1>
+        <p class="sub">Live view of <code>wallet-service</code> &amp; <code>order-service</code></p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="clock" class="clock">--:--:--</span>
+      <button id="refresh-all" class="btn btn-ghost" type="button">↻ Refresh</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- ───────────────────────── System health ───────────────────────── -->
+    <section class="card" id="health-card">
+      <div class="card-head">
+        <h2>System Health</h2>
+        <span class="muted" id="health-updated">—</span>
+      </div>
+      <ul class="health-list" id="health-list">
+        <li data-svc="frontend">
+          <span class="dot dot-unknown"></span>
+          <span class="svc-name">frontend</span>
+          <span class="svc-detail">checking…</span>
+          <span class="svc-latency"></span>
+        </li>
+        <li data-svc="wallet">
+          <span class="dot dot-unknown"></span>
+          <span class="svc-name">wallet-service</span>
+          <span class="svc-detail">checking…</span>
+          <span class="svc-latency"></span>
+        </li>
+        <li data-svc="order">
+          <span class="dot dot-unknown"></span>
+          <span class="svc-name">order-service</span>
+          <span class="svc-detail">checking…</span>
+          <span class="svc-latency"></span>
+        </li>
+      </ul>
+      <label class="auto-toggle">
+        <input type="checkbox" id="health-auto" checked />
+        Auto-refresh every 10s
+      </label>
+    </section>
+
+    <!-- ───────────────────────── Wallet balances ─────────────────────── -->
+    <section class="card" id="balance-card">
+      <div class="card-head">
+        <h2>Wallet Balances</h2>
+        <span class="muted" id="balance-updated">—</span>
+      </div>
+      <form id="balance-form" class="inline-form">
+        <input type="text" id="balance-user" placeholder="User ID (e.g. user-123)" autocomplete="off" />
+        <button class="btn" type="submit">Load</button>
+      </form>
+      <div id="balance-body" class="table-wrap">
+        <p class="empty">Enter a user ID to view balances.</p>
+      </div>
+      <label class="auto-toggle">
+        <input type="checkbox" id="balance-auto" />
+        Auto-refresh every 5s
+      </label>
+    </section>
+
+    <!-- ───────────────────────── Place an order ──────────────────────── -->
+    <section class="card" id="order-form-card">
+      <div class="card-head">
+        <h2>Place Order</h2>
+      </div>
+      <form id="order-form" class="stack-form">
+        <label>User ID
+          <input type="text" id="order-user" placeholder="user-123" autocomplete="off" required />
+        </label>
+        <div class="form-row">
+          <label>Coin
+            <input type="text" id="order-coin" value="BTC" autocomplete="off" required />
+          </label>
+          <label>Amount
+            <input type="number" id="order-amount" value="0.5" step="any" min="0" required />
+          </label>
+          <label>Action
+            <select id="order-action">
+              <option value="buy">buy</option>
+              <option value="sell">sell</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn btn-primary" type="submit">Submit Order</button>
+        <p id="order-msg" class="form-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- ───────────────────────── Recent orders ──────────────────────── -->
+    <section class="card wide" id="orders-card">
+      <div class="card-head">
+        <h2>Recent Orders</h2>
+        <button id="orders-clear" class="btn btn-ghost btn-sm" type="button">Clear</button>
+      </div>
+      <p class="muted note">
+        <code>order-service</code> is event-sourced through Kafka and exposes no read API,
+        so this panel tracks orders submitted from this console (stored in your browser).
+      </p>
+      <div id="orders-body" class="table-wrap">
+        <p class="empty">No orders submitted yet.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>served by NGINX · same-origin API proxy at <code>/api/wallet</code> &amp; <code>/api/order</code></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

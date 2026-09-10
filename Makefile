@@ -14,7 +14,7 @@
 
 TF_INFRA_DIR := terraform/infra
 AWS_REGION   ?= us-east-1
-SERVICES     := order-service wallet-service
+SERVICES     := order-service wallet-service frontend
 SECRETS_ENV  := secrets.env
 
 # Source secrets.env into the recipe shell when present; no-op when absent
@@ -37,7 +37,7 @@ up: ## Spin up the entire stack (runs ./bootstrap.sh)
 down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
 	terraform -chdir=$(TF_INFRA_DIR) destroy --auto-approve
 
-build: ## Build & push Docker images for order-service and wallet-service to ECR
+build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 	@$(LOAD_SECRETS); \
 	: "$${ECR_REGISTRY:?not set — add it to $(SECRETS_ENV) (copy $(SECRETS_ENV).example) or export it before running make}"; \
 	echo "🔑 Logging in to AWS ECR ($(AWS_REGION))..."; \
@@ -46,6 +46,10 @@ build: ## Build & push Docker images for order-service and wallet-service to ECR
 	for svc in $(SERVICES); do \
 		echo "📦 Building image for $$svc from ./services/$$svc..."; \
 		docker build -t "$${ECR_REGISTRY}/$$svc:latest" "./services/$$svc"; \
+		echo "🔎 Ensuring ECR repository '$$svc' exists ($(AWS_REGION))..."; \
+		aws ecr describe-repositories --repository-names "$$svc" --region $(AWS_REGION) >/dev/null 2>&1 \
+			|| aws ecr create-repository --repository-name "$$svc" --region $(AWS_REGION) \
+				--image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null; \
 		echo "🚀 Pushing $$svc to ECR..."; \
 		docker push "$${ECR_REGISTRY}/$$svc:latest"; \
 	done

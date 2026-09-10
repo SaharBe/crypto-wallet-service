@@ -39,13 +39,20 @@ aws eks update-kubeconfig --region us-east-1 --name crypto-wallet-eks-cluster
 echo "🔑 Logging in to AWS ECR..."
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-SERVICES=("order-service" "wallet-service")
+SERVICES=("order-service" "wallet-service" "frontend")
 
 for SERVICE in "${SERVICES[@]}"; do
   echo "📦 Building image for $SERVICE from ./services/$SERVICE..."
-  
+
   docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./services/${SERVICE}"
-  
+
+  # Terraform (terraform/infra/ecr.tf) is the source of truth for these repos,
+  # but a service added between infra applies would 404 on push — create on miss.
+  echo "🔎 Ensuring ECR repository '$SERVICE' exists..."
+  aws ecr describe-repositories --repository-names "$SERVICE" --region us-east-1 >/dev/null 2>&1 \
+    || aws ecr create-repository --repository-name "$SERVICE" --region us-east-1 \
+         --image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null
+
   echo "🚀 Pushing $SERVICE to ECR..."
   docker push "${ECR_REGISTRY}/${SERVICE}:latest"
 done

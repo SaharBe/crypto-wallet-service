@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: crypto-wallet-app
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+          env:
+            # NGINX proxies /api/wallet/* and /api/order/* to these in-cluster
+            # Services so the browser only ever talks to the frontend origin
+            # (no CORS). Names resolve via cluster DNS at request time; the
+            # resolver IP is taken from the pod's /etc/resolv.conf by the nginx
+            # image entrypoint, so it needs no config here.
+            - name: WALLET_SERVICE_HOST
+              value: "wallet-service"
+            - name: ORDER_SERVICE_HOST
+              value: "order-service"
+            - name: BACKEND_PORT
+              value: "3000"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: crypto-wallet-app
+  labels:
+    app: frontend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: frontend

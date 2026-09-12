@@ -26,9 +26,26 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
           env:
+            # Stable Service DNS, not a specific pod ordinal: the ordinal
+            # FQDN only exists while that exact pod is up, so a restart of
+            # kafka-controller-0 (new pod IP, brief unavailability while
+            # KRaft re-elects) leaves the seed broker unreachable until the
+            # next DNS TTL refresh instead of failing over immediately.
             - name: KAFKA_BROKERS
-              value: "kafka-controller-0.kafka-controller-headless.kafka.svc.cluster.local:9092"
+              value: "kafka.kafka.svc.cluster.local:9092"
             - name: DB_HOST
               value: "postgres-service.crypto-wallet-app.svc.cluster.local"
             - name: DB_USER

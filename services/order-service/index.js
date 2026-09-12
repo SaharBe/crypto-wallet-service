@@ -6,26 +6,44 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-const kafkaBrokers = process.env.KAFKA_BROKERS 
-  ? process.env.KAFKA_BROKERS.split(',') 
-  : ['kafka-controller-0.kafka-controller-headless.kafka.svc.cluster.local:9092'];
+const kafkaBrokers = process.env.KAFKA_BROKERS
+  ? process.env.KAFKA_BROKERS.split(',')
+  : ['kafka.kafka.svc.cluster.local:9092'];
 
 const kafka = new Kafka({
   clientId: 'order-service',
-  brokers: kafkaBrokers
+  brokers: kafkaBrokers,
+  retry: {
+    initialRetryTime: 300,
+    retries: 8,
+    maxRetryTime: 30000
+  }
 });
 
 const producer = kafka.producer();
 
-async function initKafka() {
+// Connects in the background — a Kafka outage at boot must not block the
+// HTTP server from coming up (that's what caused it to fail readiness in
+// the first place). connectWithRetry keeps trying instead of giving up
+// after one attempt; /orders itself still guards against a not-yet-connected
+// producer via producer.send()'s own connect-on-demand behavior.
+async function connectWithRetry(delayMs = 5000) {
   try {
     await producer.connect();
     console.log('Successfully connected to Kafka Producer.');
   } catch (error) {
-    console.error('Failed to connect to Kafka Producer:', error);
+    console.error(`Failed to connect to Kafka Producer, retrying in ${delayMs}ms:`, error.message);
+    setTimeout(() => connectWithRetry(Math.min(delayMs * 2, 60000)), delayMs);
   }
 }
-initKafka();
+connectWithRetry();
+
+// A rejected promise anywhere in the Kafka client (or elsewhere) must be
+// logged, not allowed to crash the process and take the HTTP server down
+// with it.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
 
 app.post('/orders', async (req, res) => {
   // 1. Extract action along with the other required fields

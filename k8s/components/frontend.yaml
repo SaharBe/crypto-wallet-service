@@ -34,10 +34,17 @@ spec:
             # (no CORS). Names resolve via cluster DNS at request time; the
             # resolver IP is taken from the pod's /etc/resolv.conf by the nginx
             # image entrypoint, so it needs no config here.
+            #
+            # Must be the full FQDN, not the bare Service name: nginx's
+            # `resolver` directive issues a literal DNS query and does NOT
+            # consult the pod's /etc/resolv.conf search list the way glibc's
+            # getaddrinfo does, so CoreDNS has no record for the short name
+            # and every proxied request 502s with "could not be resolved
+            # (3: Host not found)".
             - name: WALLET_SERVICE_HOST
-              value: "wallet-service"
+              value: "wallet-service.crypto-wallet-app.svc.cluster.local"
             - name: ORDER_SERVICE_HOST
-              value: "order-service"
+              value: "order-service.crypto-wallet-app.svc.cluster.local"
             - name: BACKEND_PORT
               value: "3000"
           livenessProbe:

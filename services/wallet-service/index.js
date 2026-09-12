@@ -7,6 +7,17 @@ app.use(express.json());
 
 const APP_PORT = process.env.PORT || 3000;
 
+// A crash inside the Kafka consumer (or anything else) must never take the
+// HTTP server down with it — the whole point of separating wallet reads
+// (this API) from wallet writes (the consumer) is that one can degrade
+// without the other going with it.
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+
 // GET / - Structured JSON endpoint for Wallet API
 app.get('/', async (req, res) => {
   try {

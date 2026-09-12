@@ -37,6 +37,16 @@ async function runConsumer() {
     // 2. Verify and create the topic dynamically before the consumer connects
     await ensureTopicExists(topicName);
 
+    // Visibility into KafkaJS's own internal restart loop (it retries a
+    // crashed consumer on its own — see the `retry` options in config/kafka.js
+    // — this just makes that non-fatal churn observable instead of only
+    // showing up as raw error logs).
+    consumer.on(consumer.events.CRASH, ({ payload }) => {
+      console.error(`⚠️ [Consumer] Crash (recovering): ${payload.error.message}`, {
+        restarting: payload.restart
+      });
+    });
+
     console.log('🔌 Connecting Kafka Consumer...');
     await consumer.connect();
     console.log('✅ Kafka Consumer connected successfully!');

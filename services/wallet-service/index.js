@@ -39,11 +39,18 @@ app.get('/', async (req, res) => {
 });
 
 // GET /balance/:userId - Fetch user wallet balance
+//
+// Reads from `wallets`, the same table consumer.js's UPSERT writes to (see
+// k8s/components/postgres-init-configmap.yaml for the schema). This
+// previously queried a "wallet_balances" table with "coin"/"amount" columns
+// that never existed — every request 500'd with `relation "wallet_balances"
+// does not exist`. Aliased back to coin/amount here so existing API
+// consumers (the frontend included) don't need to change.
 app.get('/balance/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
     const result = await pool.query(
-      'SELECT coin, amount FROM wallet_balances WHERE user_id = $1',
+      'SELECT currency AS coin, balance AS amount FROM wallets WHERE user_id = $1',
       [userId]
     );
     return res.status(200).json({
@@ -51,7 +58,7 @@ app.get('/balance/:userId', async (req, res) => {
       balances: result.rows
     });
   } catch (err) {
-    console.error('Error fetching balance:', err);
+    console.error(`Error fetching balance for userId=${userId}:`, err);
     return res.status(500).json({ error: 'Failed to fetch wallet balance' });
   }
 });

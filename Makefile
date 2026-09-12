@@ -22,7 +22,7 @@ SECRETS_ENV  := secrets.env
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build
+.PHONY: help up down build vault-init
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -36,6 +36,34 @@ up: ## Spin up the entire stack (runs ./bootstrap.sh)
 
 down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
 	terraform -chdir=$(TF_INFRA_DIR) destroy --auto-approve
+
+vault-init: ## Configure Vault (auth, policies, roles, secrets) via Terraform — safe to re-run
+	@$(LOAD_SECRETS); \
+	: "$${VAULT_TOKEN:?not set — add it to $(SECRETS_ENV) (copy $(SECRETS_ENV).example)}"; \
+	export TF_VAR_vault_token="$$VAULT_TOKEN"; \
+	export TF_VAR_db_username="$$DB_USERNAME"; \
+	export TF_VAR_db_password="$$DB_PASSWORD"; \
+	export TF_VAR_github_username="$$GITHUB_USERNAME"; \
+	export TF_VAR_github_pat="$$GITHUB_PAT"; \
+	export TF_VAR_repo_url="$$REPO_URL"; \
+	echo "🔌 Port-forwarding Vault so Terraform can reach it from outside the cluster..."; \
+	kubectl port-forward svc/vault -n vault 8200:8200 > /dev/null 2>&1 & \
+	VAULT_PF_PID=$$!; \
+	trap 'kill $$VAULT_PF_PID 2>/dev/null || true' EXIT; \
+	echo "⌛ Waiting for Vault to report initialized and unsealed..."; \
+	elapsed=0; \
+	until curl -s http://127.0.0.1:8200/v1/sys/health 2>/dev/null | grep -q '"sealed":false'; do \
+		if [ "$$elapsed" -ge 120 ]; then \
+			echo "❌ Timed out after 120s waiting for Vault to unseal."; \
+			echo "   Check 'kubectl logs -n vault -l app.kubernetes.io/name=vault'."; \
+			exit 1; \
+		fi; \
+		sleep 2; elapsed=$$((elapsed + 2)); \
+	done; \
+	echo "✅ Vault is initialized and unsealed."; \
+	terraform -chdir=terraform/vault-config init -backend-config=backend.hcl -input=false; \
+	terraform -chdir=terraform/vault-config apply --auto-approve; \
+	echo "✅ Vault configured successfully via Terraform!"
 
 build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 	@$(LOAD_SECRETS); \

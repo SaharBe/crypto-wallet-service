@@ -6,19 +6,19 @@ metadata:
   annotations:
     # Grafana's Deployment (via existingSecret: grafana-admin-credentials)
     # needs that Secret to exist before its pod can start. The Secret comes
-    # from k8s/apps/grafana-secret.yaml's ExternalSecret, which lives at the
-    # default wave (0) alongside this Application's own siblings — putting
-    # this Application in a later wave makes ArgoCD create it only after
-    # that ExternalSecret object exists, giving ESO a head start instead of
-    # racing Grafana's pod creation against it.
+    # from k8s/apps/grafana-secret.yaml's ExternalSecret, which is pinned to
+    # this same wave ("1") rather than the default wave (0) — see that
+    # file's comment. Sharing a wave means both are created together, so
+    # this Application never has to wait behind an ExternalSecret that
+    # can't turn Healthy until Vault is configured.
     #
-    # This narrows but doesn't close the race: Vault's monitoring-role
-    # (created by `terraform apply` in terraform/vault-config, a bootstrap.sh
-    # shell step outside ArgoCD's sync) may still not exist yet when this
-    # wave runs. If so, ESO retries with backoff and the Secret appears a
-    # little later — bootstrap.sh Step 8 restarts the Grafana deployment and
-    # waits on this Application's health after that terraform apply
-    # completes, same as it already does for crypto-wallet-app.
+    # Vault's monitoring-role (created by `terraform apply` in
+    # terraform/vault-config, a bootstrap.sh shell step outside ArgoCD's
+    # sync) may still not exist yet when this wave runs. If so, ESO retries
+    # with backoff and the Secret appears a little later — bootstrap.sh's
+    # final step restarts the Grafana deployment and waits on this
+    # Application's health after that terraform apply completes, same as it
+    # already does for crypto-wallet-app.
     argocd.argoproj.io/sync-wave: "1"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -57,3 +57,12 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+    # See k8s/root-app.yaml for why: retry transient failures (e.g. Grafana's
+    # existingSecret not landed yet) instead of leaving the sync failed until
+    # the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

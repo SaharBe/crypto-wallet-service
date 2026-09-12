@@ -108,68 +108,109 @@ echo -e "\n🔹 Step 5: Registering the App-of-Apps..."
 # is the one place it needs substituting.
 envsubst '${REPO_URL}' < k8s/root-app.yaml | kubectl apply -f -
 
-echo -e "\n🔹 Step 6: Waiting for ArgoCD to finish syncing Infrastructure apps..."
+# Blocks until an ArgoCD Application resource exists — bounded, with a
+# clear timeout message instead of hanging bootstrap.sh forever if an
+# earlier-wave app is stuck failing (a stuck wave won't retry itself).
+wait_for_application_created() {
+  local app="$1"
+  local create_timeout="${2:-300}"
+  local elapsed=0
 
-INFRA_APPS=("vault" "external-secrets" "kafka")
-
-for app in "${INFRA_APPS[@]}"; do
   echo "⌛ Waiting for '$app' Application resource to be created by ArgoCD..."
   until kubectl get application "$app" -n argocd >/dev/null 2>&1; do
-    sleep 3
-  done
-
-  echo "⌛ Waiting for '$app' to become Synced/Healthy..."
-  kubectl wait application "$app" -n argocd \
-    --for=jsonpath='{.status.sync.status}'=Synced \
-    --timeout=300s
-  kubectl wait application "$app" -n argocd \
-    --for=jsonpath='{.status.health.status}'=Healthy \
-    --timeout=300s
-done
-
-echo -e "\n🔹 Step 7: Configuring Vault via Terraform (auth, policy, roles, secrets)..."
-echo "🔌 Port-forwarding Vault so Terraform can reach it from outside the cluster..."
-kubectl port-forward svc/vault -n vault 8200:8200 > /dev/null 2>&1 &
-VAULT_PF_PID=$!
-trap 'kill $VAULT_PF_PID 2>/dev/null || true' EXIT
-
-until curl -s -o /dev/null http://127.0.0.1:8200/v1/sys/health; do
-  sleep 2
-done
-
-terraform -chdir=terraform/vault-config init -backend-config=backend.hcl -input=false
-terraform -chdir=terraform/vault-config apply --auto-approve
-echo "✅ Vault configured successfully via Terraform!"
-
-kill "$VAULT_PF_PID" 2>/dev/null || true
-trap - EXIT
-
-echo -e "\n🔹 Step 8: Waiting for crypto-wallet-app and monitoring-stack to consume secrets and become Healthy..."
-# monitoring-stack syncs at wave "1" (see k8s/apps/monitoring-app.yaml), so
-# root-app only creates its Application resource once wave 0 — which
-# includes crypto-wallet-app — is itself Synced/Healthy. crypto-wallet-app's
-# own health depends on the terraform apply above too, so on a clean
-# bootstrap neither Application is guaranteed to exist by the time this step
-# starts. Wait for each to actually be created before `kubectl wait`-ing on
-# it, same guard Step 6 uses for INFRA_APPS — without it, a fresh cluster
-# hits "applications.argoproj.io \"monitoring-stack\" not found".
-for app in "crypto-wallet-app" "monitoring-stack"; do
-  echo "⌛ Waiting for '$app' Application resource to be created by ArgoCD..."
-  # Bounded, unlike Step 6's equivalent loop: this Application only appears
-  # once wave 0 fully succeeds, which includes apps unrelated to this fix
-  # (e.g. kyverno) that could stall for reasons of their own. Fail loudly
-  # after 5 minutes instead of hanging bootstrap.sh forever.
-  WAIT_ELAPSED=0
-  until kubectl get application "$app" -n argocd >/dev/null 2>&1; do
-    if [ "$WAIT_ELAPSED" -ge 300 ]; then
-      echo "❌ Timed out after 300s waiting for Application '$app' to be created by ArgoCD."
-      echo "   Check 'kubectl get applications -n argocd' — a wave-0 app may be stuck failing"
-      echo "   and blocking wave 1 (root-application won't retry a failed sync on its own)."
+    if [ "$elapsed" -ge "$create_timeout" ]; then
+      echo "❌ Timed out after ${create_timeout}s waiting for Application '$app' to be created by ArgoCD."
+      echo "   Check 'kubectl get applications -n argocd' — an earlier-wave app may be stuck failing."
       exit 1
     fi
     sleep 3
-    WAIT_ELAPSED=$((WAIT_ELAPSED + 3))
+    elapsed=$((elapsed + 3))
   done
+}
+
+# Polls an existing ArgoCD Application until it reports Synced + Healthy —
+# printing status periodically instead of blocking silently on one long
+# `kubectl wait`, so a slow-but-progressing sync doesn't read as a hang, and
+# a genuinely stuck one fails with a clear, actionable message instead of
+# kubectl's raw timeout error.
+wait_for_application_healthy() {
+  local app="$1"
+  local health_timeout="${2:-300}"
+  local elapsed=0
+  local interval=5
+  local last_status=""
+
+  echo "⌛ Waiting for '$app' to become Synced/Healthy (timeout ${health_timeout}s)..."
+  while true; do
+    local sync health status
+    sync=$(kubectl get application "$app" -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+    health=$(kubectl get application "$app" -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+    status="sync=$sync health=$health"
+
+    if [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]; then
+      echo "✅ '$app' is Synced/Healthy."
+      return 0
+    fi
+
+    # Print on every status change, and at least every ~30s so a run that's
+    # genuinely still progressing doesn't look stalled.
+    if [ "$status" != "$last_status" ] || [ $((elapsed % 30)) -eq 0 ]; then
+      echo "   ...'$app' status: $status (${elapsed}s/${health_timeout}s)"
+      last_status="$status"
+    fi
+
+    if [ "$elapsed" -ge "$health_timeout" ]; then
+      echo "❌ Timed out after ${health_timeout}s waiting for '$app' to become Synced/Healthy (last status: $status)."
+      echo "   Check 'kubectl get application $app -n argocd -o yaml' for details."
+      exit 1
+    fi
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+}
+
+# Composes the two: wait for the Application to exist, then for it to turn
+# Synced/Healthy. What every plain wait below actually wants.
+wait_for_application() {
+  wait_for_application_created "$1" "${2:-300}"
+  wait_for_application_healthy "$1" "${3:-300}"
+}
+
+echo -e "\n🔹 Step 6: Waiting for Vault to become Synced/Healthy..."
+# Vault alone, ahead of external-secrets/kafka: those two are unrelated to
+# Vault and would only add avoidable delay before Step 7 can configure
+# Vault — the longer that takes, the wider the window in which downstream
+# ExternalSecrets (grafana-admin-credentials, crypto-db-external-secret)
+# race Vault being populated.
+wait_for_application "vault"
+
+echo -e "\n🔹 Step 7: Initializing Vault (auth, policy, roles, secrets)..."
+# `make vault-init` owns the actual init/secret-injection logic (port-
+# forwarding Vault, confirming it's unsealed, running terraform apply
+# against terraform/vault-config) so it can also be re-run standalone —
+# e.g. after a dev-mode Vault restart wipes its in-memory state, without
+# rerunning the rest of bootstrap.sh. Vault's Application being Healthy
+# (Step 6) only means its Pod passed readiness; `make vault-init` confirms
+# it's actually unsealed before Terraform starts writing to it.
+make vault-init
+
+echo -e "\n🔹 Step 8: Waiting for remaining Infrastructure apps to finish syncing..."
+for app in "external-secrets" "kafka"; do
+  wait_for_application "$app"
+done
+
+echo -e "\n🔹 Step 9: Waiting for crypto-wallet-app and monitoring-stack to consume secrets and become Healthy..."
+# monitoring-stack and grafana-secret.yaml's ExternalSecret both sync at
+# wave "1" (see k8s/apps/monitoring-app.yaml), so root-app only creates the
+# monitoring-stack Application once wave 0 — which includes crypto-wallet-app
+# — is itself Synced/Healthy. crypto-wallet-app's own health depends on the
+# terraform apply above too, so on a clean bootstrap neither Application is
+# guaranteed to exist by the time this step starts; wait_for_application's
+# bounded create-wait (default 300s) handles that the same way it does for
+# the infra apps above — without it, a fresh cluster hits
+# "applications.argoproj.io \"monitoring-stack\" not found".
+for app in "crypto-wallet-app" "monitoring-stack"; do
+  wait_for_application_created "$app"
 
   # Restart the app's Deployments once its Application object exists, so
   # pods that came up before ESO synced their secret pick it up now rather
@@ -182,13 +223,7 @@ for app in "crypto-wallet-app" "monitoring-stack"; do
     kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
   fi
 
-  echo "⌛ Waiting for '$app' to become Synced/Healthy..."
-  kubectl wait application "$app" -n argocd \
-    --for=jsonpath='{.status.sync.status}'=Synced \
-    --timeout=300s
-  kubectl wait application "$app" -n argocd \
-    --for=jsonpath='{.status.health.status}'=Healthy \
-    --timeout=300s
+  wait_for_application_healthy "$app"
 done
 
 echo -e "\n=================================================="

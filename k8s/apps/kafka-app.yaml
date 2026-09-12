@@ -58,3 +58,11 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+    # See k8s/root-app.yaml for why: retry transient failures instead of
+    # leaving the sync failed until the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

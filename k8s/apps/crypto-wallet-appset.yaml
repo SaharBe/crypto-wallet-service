@@ -62,3 +62,12 @@ spec:
         syncOptions:
           - CreateNamespace=true
           - SkipDryRunOnMissingResource=true
+        # See k8s/root-app.yaml for why: retry transient failures (e.g.
+        # crypto-wallet-app's ExternalSecret not resolved from Vault yet)
+        # instead of leaving the sync failed until the next selfHeal pass.
+        retry:
+          limit: 10
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m

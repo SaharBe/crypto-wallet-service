@@ -29,3 +29,13 @@ spec:
       # pre-sync validation fails on those resources and aborts the whole
       # operation before wave 0 ever runs.
       - SkipDryRunOnMissingResource=true
+    # A cold-cluster sync operation can hit a resource that's transiently
+    # not-ready yet (a CRD not registered, a namespace not created, Vault
+    # still warming up) — retry with backoff instead of leaving the whole
+    # App-of-Apps sync failed until the next selfHeal pass notices drift.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

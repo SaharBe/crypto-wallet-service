@@ -3,11 +3,27 @@ name: CI/CD Platform Pipeline to AWS ECR
 on:
   push:
     branches: [ main, master ]
+    paths:
+      - 'services/wallet-service/**'
+      - 'services/order-service/**'
+      - 'services/frontend/**'
+      - '.github/workflows/ci.yml'
+
+# update-manifests pushes a commit back to this branch — GITHUB_TOKEN is
+# read-only by default, so that push needs this explicitly.
+permissions:
+  contents: write
+
+# Serialize runs on the same branch so two pushes in quick succession can't
+# race each other's manifest-update commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         service:
@@ -15,6 +31,8 @@ jobs:
             context: ./services/wallet-service
           - name: order-service
             context: ./services/order-service
+          - name: frontend
+            context: ./services/frontend
 
     steps:
     - name: Check out source code
@@ -37,6 +55,56 @@ jobs:
         ECR_REPOSITORY: ${{ matrix.service.name }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
+        # :latest stays for manual/local convenience (`make build` parity);
+        # :$IMAGE_TAG is the immutable reference the manifests below get
+        # pinned to — ArgoCD deploys off that tag, never off :latest.
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ${{ matrix.service.context }}
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  # ArgoCD (selfHeal, automated) only acts on a diff in the manifests it
+  # syncs from this repo — pushing a new :latest image to ECR is invisible
+  # to it, since the Deployment's `image:` string never changes. This job
+  # is what actually makes a push to main deploy: it rewrites each
+  # Deployment to this build's immutable commit-SHA tag and pushes that as
+  # a normal commit, so ArgoCD sees real drift and rolls the new pods out
+  # on its own — no manual `kubectl rollout restart` needed.
+  update-manifests:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out source code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.ref_name }}
+
+    - name: Pin Deployment manifests to this build's image tag
+      env:
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        declare -A files=(
+          [wallet-service]=k8s/components/wallet-service.yaml
+          [order-service]=k8s/components/order-service.yaml
+          [frontend]=k8s/components/frontend.yaml
+        )
+        for svc in "${!files[@]}"; do
+          file="${files[$svc]}"
+          sed -i -E "s#(079000477935\.dkr\.ecr\.us-east-1\.amazonaws\.com/${svc}):[A-Za-z0-9._-]+#\1:${IMAGE_TAG}#" "$file"
+        done
+
+    - name: Commit & push (skip if nothing changed)
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        if git diff --quiet; then
+          echo "Manifests already pinned to ${GITHUB_SHA} — nothing to do."
+          exit 0
+        fi
+        git add k8s/components/wallet-service.yaml k8s/components/order-service.yaml k8s/components/frontend.yaml
+        git commit -m "chore(deploy): pin images to ${GITHUB_SHA}"
+        # A push landing between checkout and here would otherwise make this
+        # push a non-fast-forward; rebase onto whatever's there now.
+        git pull --rebase origin "${GITHUB_REF_NAME}"
+        git push origin HEAD:"${GITHUB_REF_NAME}"

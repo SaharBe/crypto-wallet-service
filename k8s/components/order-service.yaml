@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: order-service
-        image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/order-service:latest
+        image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/order-service:50f98e400315912ec72da338e06a412a93f66e79
         imagePullPolicy: Always
         resources:
           requests:

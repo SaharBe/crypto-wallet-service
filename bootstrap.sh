@@ -44,7 +44,22 @@ SERVICES=("order-service" "wallet-service" "frontend")
 for SERVICE in "${SERVICES[@]}"; do
   echo "📦 Building image for $SERVICE from ./services/$SERVICE..."
 
+  # CI's update-manifests job (.github/workflows/ci.yml) pins each Deployment
+  # to an immutable :<commit-sha> tag, not :latest — so if ECR ever comes up
+  # empty against a repo whose manifests are already pinned (a fresh
+  # terraform apply, a wiped registry, ...), pushing only :latest here left
+  # the actually-referenced tag 404ing on pull (confirmed live: ImagePullBack-
+  # Off, "not found", on a `make up` run after exactly that happened).
+  # Build against whatever tag the manifest currently asks for, so this
+  # step always leaves ECR holding the exact image about to be deployed,
+  # regardless of whether CI has pinned it yet. Falls back to "latest" if
+  # the manifest can't be parsed, matching the old unconditional behavior.
+  MANIFEST="k8s/components/${SERVICE}.yaml"
+  TAG=$(sed -n "s#.*/${SERVICE}:\([^[:space:]\"']*\).*#\1#p" "$MANIFEST" | head -1)
+  TAG="${TAG:-latest}"
+
   docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./services/${SERVICE}"
+  [ "$TAG" != "latest" ] && docker tag "${ECR_REGISTRY}/${SERVICE}:latest" "${ECR_REGISTRY}/${SERVICE}:${TAG}"
 
   # Terraform (terraform/infra/ecr.tf) is the source of truth for these repos,
   # but a service added between infra applies would 404 on push — create on miss.
@@ -53,8 +68,14 @@ for SERVICE in "${SERVICES[@]}"; do
     || aws ecr create-repository --repository-name "$SERVICE" --region us-east-1 \
          --image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null
 
-  echo "🚀 Pushing $SERVICE to ECR..."
-  docker push "${ECR_REGISTRY}/${SERVICE}:latest"
+  if [ "$TAG" != "latest" ]; then
+    echo "🚀 Pushing $SERVICE to ECR (latest, and pinned tag $TAG)..."
+    docker push "${ECR_REGISTRY}/${SERVICE}:latest"
+    docker push "${ECR_REGISTRY}/${SERVICE}:${TAG}"
+  else
+    echo "🚀 Pushing $SERVICE to ECR (latest)..."
+    docker push "${ECR_REGISTRY}/${SERVICE}:latest"
+  fi
 done
 
 echo "✅ Initial images are live in ECR!"
@@ -195,7 +216,12 @@ echo -e "\n🔹 Step 7: Initializing Vault (auth, policy, roles, secrets)..."
 make vault-init
 
 echo -e "\n🔹 Step 8: Waiting for remaining Infrastructure apps to finish syncing..."
-for app in "external-secrets" "kafka"; do
+# kyverno added here (it wasn't waited on before): it's a wave-0 app like
+# the other two, and kyverno-policies (Step 10) can't even be created until
+# this one is Synced/Healthy, so any problem with it is best caught here
+# with a clear message rather than surfacing later as a confusing timeout
+# on kyverno-policies' create-wait.
+for app in "external-secrets" "kafka" "kyverno"; do
   wait_for_application "$app"
 done
 
@@ -225,6 +251,17 @@ for app in "crypto-wallet-app" "monitoring-stack"; do
 
   wait_for_application_healthy "$app"
 done
+
+echo -e "\n🔹 Step 10: Waiting for kyverno-policies to sync ClusterPolicy objects..."
+# Wave "1" (see k8s/apps/kyverno-policies-app.yaml), same as
+# monitoring-stack/crypto-wallet-app above — gated behind kyverno (wave 0,
+# waited on in Step 8) actually registering the ClusterPolicy CRD and its
+# admission webhook, so this Application's first sync can't race that
+# install. Without this wait, bootstrap.sh could report success while this
+# Application was still mid-retry — the exact gap that used to leave
+# root-application looking OutOfSync after `make up` finished, with nothing
+# left in the script to explain why.
+wait_for_application "kyverno-policies"
 
 echo -e "\n=================================================="
 echo "✅ Bootstrap script completed successfully!"

@@ -73,11 +73,21 @@ build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 		| docker login --username AWS --password-stdin "$${ECR_REGISTRY}"; \
 	for svc in $(SERVICES); do \
 		echo "📦 Building image for $$svc from ./services/$$svc..."; \
+		manifest="k8s/components/$$svc.yaml"; \
+		tag=$$(sed -n "s#.*/$$svc:\([^[:space:]\"']*\).*#\1#p" "$$manifest" | head -1); \
+		tag="$${tag:-latest}"; \
 		docker build -t "$${ECR_REGISTRY}/$$svc:latest" "./services/$$svc"; \
+		if [ "$$tag" != "latest" ]; then docker tag "$${ECR_REGISTRY}/$$svc:latest" "$${ECR_REGISTRY}/$$svc:$$tag"; fi; \
 		echo "🔎 Ensuring ECR repository '$$svc' exists ($(AWS_REGION))..."; \
 		aws ecr describe-repositories --repository-names "$$svc" --region $(AWS_REGION) >/dev/null 2>&1 \
 			|| aws ecr create-repository --repository-name "$$svc" --region $(AWS_REGION) \
 				--image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null; \
-		echo "🚀 Pushing $$svc to ECR..."; \
-		docker push "$${ECR_REGISTRY}/$$svc:latest"; \
+		if [ "$$tag" != "latest" ]; then \
+			echo "🚀 Pushing $$svc to ECR (latest, and pinned tag $$tag)..."; \
+			docker push "$${ECR_REGISTRY}/$$svc:latest"; \
+			docker push "$${ECR_REGISTRY}/$$svc:$$tag"; \
+		else \
+			echo "🚀 Pushing $$svc to ECR (latest)..."; \
+			docker push "$${ECR_REGISTRY}/$$svc:latest"; \
+		fi; \
 	done

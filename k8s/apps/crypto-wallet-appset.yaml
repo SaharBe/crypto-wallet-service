@@ -1,24 +1,32 @@
-# The three Applications that live in THIS repo (crypto-wallet-app,
-# kyverno-policies, monitoring-custom) used to be three near-identical
-# Application manifests, each repeating repoURL. They're collapsed here into
-# one ApplicationSet so the repository URL is declared exactly once (in the
-# template's `source.repoURL`); a list-generator element then only varies the
-# bits that actually differ per app — its name, the path it syncs, and the
-# destination namespace.
+# The Applications that live in THIS repo (crypto-wallet-app,
+# monitoring-custom) used to be near-identical Application manifests, each
+# repeating repoURL. They're collapsed here into one ApplicationSet so the
+# repository URL is declared exactly once (in the template's
+# `source.repoURL`); a list-generator element then only varies the bits that
+# actually differ per app — its name, the path it syncs, and the destination
+# namespace.
+#
+# kyverno-policies used to be a third element here, but it needed its own
+# sync-wave (to come up strictly after the `kyverno` Application's CRDs are
+# registered) and its own ignoreDifferences (Kyverno's policy-mutating-
+# webhook injects defaults into every ClusterPolicy it admits, which ArgoCD
+# otherwise flags as permanent drift) — neither of which an ApplicationSet
+# template can vary per element without a second generator dimension just
+# for one app. It now lives in kyverno-policies-app.yaml instead; see that
+# file's header for the full story.
 #
 # ArgoCD syncs k8s/apps/ straight from git, so there's no `envsubst` step in
 # this path (unlike k8s/root-app.yaml). The ApplicationSet template IS the
-# single source of truth for these three; keep it in sync with the REPO_URL
-# in secrets.env.
+# single source of truth for these; keep it in sync with the REPO_URL in
+# secrets.env.
 #
-# syncOptions are unified to the superset the three apps need:
-#   - CreateNamespace=true           kyverno / monitoring namespaces (no-op
-#                                    for the pre-existing `default` namespace).
+# syncOptions are unified to the superset the apps need:
+#   - CreateNamespace=true           monitoring namespace (no-op for the
+#                                    pre-existing `default` namespace).
 #   - SkipDryRunOnMissingResource=true
 #                                    crypto-wallet-app's external-secret.yaml
-#                                    and kyverno-policies' Policy CRs both
-#                                    reference CRDs installed by a separate
-#                                    Application, so their first sync would
+#                                    references a CRD installed by a separate
+#                                    Application, so its first sync would
 #                                    otherwise fail pre-sync validation.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -34,9 +42,6 @@ spec:
           - name: crypto-wallet-app
             path: k8s/components
             namespace: default
-          - name: kyverno-policies
-            path: k8s/apps/kyverno-policies
-            namespace: kyverno
           - name: monitoring-custom
             path: k8s/apps/monitoring
             namespace: monitoring

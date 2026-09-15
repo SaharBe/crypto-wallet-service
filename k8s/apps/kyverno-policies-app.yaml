@@ -1,0 +1,81 @@
+# Split out of crypto-wallet-appset.yaml's ApplicationSet into its own
+# Application, for two reasons confirmed live on this cluster:
+#
+# 1. Ordering. The ApplicationSet (crypto-wallet-apps) is itself a
+#    default-wave (0) resource of root-application, same as the `kyverno`
+#    Application below — but ArgoCD doesn't serialize *within* a wave, and
+#    an ApplicationSet's generated children aren't wave-gated behind their
+#    siblings at all (ApplicationSet has no built-in health check, so
+#    root-application's wave-gate treats it as satisfied the instant the
+#    object exists — it never waits on what it generates). That let
+#    kyverno-policies' first sync of ClusterPolicy resources race kyverno's
+#    own CRD installation on a cold cluster: SkipDryRunOnMissingResource
+#    stops the *dry-run* from hard-failing, but the live apply still needs
+#    the CRD to exist, so a slow-starting Kyverno burns through this app's
+#    retry budget before the CRD is registered. As a standalone Application
+#    with sync-wave "1", it isn't created until `kyverno` (wave "0") is
+#    itself Synced/Healthy, which removes the race entirely.
+#
+# 2. Drift. Kyverno's own policy-mutating-webhook (kyverno-policy-mutating-
+#    webhook-cfg) intercepts every create/update of a ClusterPolicy and
+#    injects defaults ArgoCD never applied — confirmed live:
+#    `spec.admission: true` and `spec.rules[].skipBackgroundRequests: true`
+#    appear on the running require-resource-limits object with no
+#    corresponding line in this repo. ArgoCD flags this as permanent drift
+#    every reconcile: `selfHeal` re-applies, Kyverno's controller re-adds
+#    the fields a few seconds later, repeat — confirmed live via
+#    `.status.operationState.syncResult.sync.autoHealAttemptsCount`
+#    climbing (5 firings inside ~3 minutes) while `.status.sync.status`
+#    stayed OutOfSync the entire time.
+#
+#    Tried first, and confirmed NOT sufficient on its own: ServerSideApply +
+#    ignoreDifferences.managedFieldsManagers: [kyverno] (ignore whatever
+#    field manager "kyverno" owns). Kept fighting regardless — `rules` is a
+#    plain array in this CRD's schema with no `x-kubernetes-list-map-keys`,
+#    so SSA can't attribute ownership of one array element's sub-field
+#    (`rules[0].skipBackgroundRequests`) finely enough for that comparison
+#    to work; it's a documented limitation of managedFieldsManagers for
+#    non-associative lists, not a config mistake. jqPathExpressions below
+#    sidesteps it entirely — it nulls out these exact JSON paths before
+#    diffing, independent of who owns what.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno-policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/SaharBe/crypto-wallet-service.git
+    targetRevision: HEAD
+    path: k8s/apps/kyverno-policies
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  ignoreDifferences:
+    - group: kyverno.io
+      kind: ClusterPolicy
+      jqPathExpressions:
+        - '.spec.admission'
+        - '.spec.rules[].skipBackgroundRequests'
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    # See k8s/root-app.yaml for why: retry transient failures instead of
+    # leaving the sync failed until the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

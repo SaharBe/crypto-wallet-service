@@ -44,10 +44,17 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    # No RespectIgnoreDifferences/ignoreDifferences here: `helm template`
+    # against this exact chart+values confirms it renders no
+    # MutatingWebhookConfiguration/ValidatingWebhookConfiguration or other
+    # resource with fields a controller mutates post-apply — those get
+    # created by Kyverno's own controller entirely outside this chart's
+    # manifest, so ArgoCD never tracks them and there's nothing here to
+    # ignore. The actual runtime-drift problem is on the ClusterPolicy
+    # resources this chart's CRDs enable — see kyverno-policies-app.yaml.
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
-      - RespectIgnoreDifferences=true
     # See k8s/root-app.yaml for why: retry transient failures instead of
     # leaving the sync failed until the next selfHeal pass.
     retry:

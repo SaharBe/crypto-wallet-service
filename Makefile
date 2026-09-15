@@ -17,12 +17,22 @@ AWS_REGION   ?= us-east-1
 SERVICES     := order-service wallet-service frontend
 SECRETS_ENV  := secrets.env
 
+# k6 performance tests — see tests/performance/. K6_SCRIPT picks which one;
+# K6_MODE=local runs against BASE_URL (default: a port-forwarded frontend
+# Service) via a local k6 binary or, if missing, the grafana/k6 Docker
+# image; K6_MODE=cluster runs it in-cluster as an ephemeral Pod instead
+# (tests/performance/run-in-cluster.sh), hitting the frontend Service
+# directly with no port-forward involved.
+K6_SCRIPT ?= load-test.js
+K6_MODE   ?= local
+BASE_URL  ?= http://localhost:8080
+
 # Source secrets.env into the recipe shell when present; no-op when absent
 # (targets that need a specific variable assert on it explicitly — see build).
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build vault-init
+.PHONY: help up down build vault-init test-load
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -91,3 +101,17 @@ build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 			docker push "$${ECR_REGISTRY}/$$svc:latest"; \
 		fi; \
 	done
+
+test-load: ## Run k6 load tests. K6_SCRIPT=load-test.js|spike-test.js|kafka-pipeline-stress.js (default load-test.js), K6_MODE=local|cluster (default local), BASE_URL=... (local mode only; default http://localhost:8080 — run `kubectl port-forward svc/frontend 8080:80 -n crypto-wallet-app` first)
+	@if [ "$(K6_MODE)" = "cluster" ]; then \
+		./tests/performance/run-in-cluster.sh "$(K6_SCRIPT)"; \
+	elif command -v k6 >/dev/null 2>&1; then \
+		echo "🚀 Running $(K6_SCRIPT) locally against $(BASE_URL)..."; \
+		BASE_URL="$(BASE_URL)" k6 run "tests/performance/$(K6_SCRIPT)"; \
+	else \
+		echo "🐳 k6 not found locally — running $(K6_SCRIPT) via the grafana/k6 Docker image against $(BASE_URL)..."; \
+		docker run --rm -i --network host \
+			-e BASE_URL="$(BASE_URL)" \
+			-v "$$(pwd)/tests/performance:/scripts" \
+			grafana/k6:latest run "/scripts/$(K6_SCRIPT)"; \
+	fi

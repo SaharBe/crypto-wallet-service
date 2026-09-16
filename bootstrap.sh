@@ -98,7 +98,7 @@ kubectl wait pod -n argocd -l app.kubernetes.io/name=argocd-server --for=conditi
 echo -e "\n🔹 Setting permanent admin password for ArgoCD..."
 kubectl patch secret argocd-secret -n argocd \
   -p '{"stringData": {
-    "admin.password": "$2a$10$Ks7VkSbYBQYeV4UYVHqam.0ERCRe4pbn4HYFJsI/rzn.gF1J32W9a",
+    "admin.password": "$2b$10$hBNWpw.ONTDCve3z1hPRu.06vXH.eIf5jSsN7keVk3UJ86FlqZBDS",
     "admin.passwordMtime": "2026-07-14T12:00:00Z"
   }}'
 

@@ -104,6 +104,17 @@ kubectl patch secret argocd-secret -n argocd \
 
 kubectl rollout restart deployment argocd-server -n argocd
 kubectl rollout status deployment argocd-server -n argocd
+
+# install.yaml (applied above) always creates this with a random generated
+# password. Once the fixed admin.password patch above is live and the
+# server's picked it up, this initial secret is a stale, unused alternate
+# credential (ArgoCD itself only reads it to bootstrap admin.password on
+# first install, never again afterward) — delete it so it can't be logged
+# into. --ignore-not-found: harmless on a re-run of bootstrap.sh where it's
+# already gone.
+echo -e "\n🔹 Removing the auto-generated initial admin secret (fixed password patch above supersedes it)..."
+kubectl delete secret argocd-initial-admin-secret -n argocd --ignore-not-found
+
 echo -e "\n🔹 Getting permanent admin password for ArgoCD:"
 kubectl get secret argocd-secret -n argocd -o yaml
 

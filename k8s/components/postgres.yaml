@@ -35,6 +35,22 @@ spec:
       containers:
       - name: postgres
         image: postgres:15
+        # k8s/apps/kyverno-policies/disallow-missing-limits.yaml requires
+        # every container to declare both — this container never had to
+        # before because its only prior Pod predates that policy (admission
+        # control doesn't touch already-running Pods). The Recreate
+        # strategy above forces a real Pod recreation on every rollout now,
+        # so a future rollout without this would get rejected outright
+        # (confirmed live: `FailedCreate ... require-resource-limits ...
+        # CPU and memory limits are required for all containers`, 38
+        # minutes of Postgres downtime until this was added).
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         env:
         - name: POSTGRES_USER
           value: "myuser"

@@ -1,0 +1,71 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: 'https://kubernetes.github.io/ingress-nginx'
+    chart: ingress-nginx
+    targetRevision: 4.15.1
+    helm:
+      values: |
+        controller:
+          replicaCount: 1
+          # This is a single-node learning/local-dev cluster reached over
+          # `kubectl port-forward` (see scripts/setup-hosts.sh and
+          # `make ingress-forward`), not a public endpoint — no AWS ELB to
+          # provision or pay for.
+          service:
+            type: ClusterIP
+          # k8s/apps/kyverno-policies/disallow-missing-limits.yaml enforces
+          # resource limits on every Pod outside kube-system/argocd/kyverno/
+          # monitoring. ingress-nginx isn't in that exclude list, so the
+          # controller AND its admission-webhook cert Jobs below need
+          # explicit limits or Kyverno rejects them outright (confirmed via
+          # `helm template` against this exact chart+values: both Jobs
+          # default resources to `{}`).
+          resources:
+            requests:
+              cpu: 100m
+              memory: 90Mi
+            limits:
+              cpu: 200m
+              memory: 180Mi
+          admissionWebhooks:
+            createSecretJob:
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 20Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
+            patchWebhookJob:
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 20Mi
+                limits:
+                  cpu: 50m
+                  memory: 64Mi
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: ingress-nginx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # See k8s/root-app.yaml for why: retry transient failures instead of
+    # leaving the sync failed until the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

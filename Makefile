@@ -32,7 +32,7 @@ BASE_URL  ?= http://localhost:8080
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build vault-init test-load
+.PHONY: help up down build vault-init test-load setup-hosts ingress-forward
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -46,6 +46,14 @@ up: ## Spin up the entire stack (runs ./bootstrap.sh)
 
 down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
 	terraform -chdir=$(TF_INFRA_DIR) destroy --auto-approve
+
+setup-hosts: ## Add argocd.local/grafana.local/vault.local/wallet.local to /etc/hosts (sudo if needed)
+	@./scripts/setup-hosts.sh
+
+ingress-forward: ## Port-forward the ingress-nginx controller to localhost:8080 — leave running, then browse *.local:8080 (run `make setup-hosts` first)
+	@echo "🔌 Forwarding svc/ingress-nginx-controller (ingress-nginx ns) -> http://localhost:8080"; \
+	echo "   Ctrl+C to stop. Browse: http://argocd.local:8080  http://grafana.local:8080  http://vault.local:8080  http://wallet.local:8080"; \
+	kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80
 
 vault-init: ## Configure Vault (auth, policies, roles, secrets) via Terraform — safe to re-run
 	@$(LOAD_SECRETS); \

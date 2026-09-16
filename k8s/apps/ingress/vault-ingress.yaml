@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: vault.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # Same Service the Makefile's vault-init target already
+                # port-forwards (`kubectl port-forward svc/vault -n vault`)
+                # — plain HTTP, since server.dev.enabled=true (k8s/apps/
+                # vault.yaml) runs Vault without TLS.
+                name: vault
+                port:
+                  number: 8200

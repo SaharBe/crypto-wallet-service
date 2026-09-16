@@ -1,0 +1,50 @@
+# The four Ingress objects under k8s/apps/ingress/ route argocd.local,
+# grafana.local, vault.local and wallet.local to argocd-server, the
+# kube-prometheus-stack Grafana, Vault and the crypto-wallet frontend
+# respectively. They're grouped into one Application here rather than living
+# next to each backend's own manifests because three of those four backends
+# (argocd, vault, kube-prometheus-stack) are remote Helm charts with no repo
+# path of their own to carry a sibling Ingress — one dedicated Application
+# keeps "how do I reach every service" in a single place instead of scattered
+# across four different sync sources.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress
+  namespace: argocd
+  annotations:
+    # Ingress objects don't hard-require the IngressClass to exist to be
+    # admitted, but wave "1" keeps them landing after the `ingress-nginx`
+    # Application (wave "0", default) is actually Synced/Healthy, so
+    # `ingressClassName: nginx` resolves to a real controller from the
+    # moment these are created — same ordering rationale as
+    # kyverno-policies-app.yaml.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/SaharBe/crypto-wallet-service.git
+    targetRevision: HEAD
+    path: k8s/apps/ingress
+  destination:
+    server: https://kubernetes.default.svc
+    # No single "right" namespace here — each Ingress below sets its own
+    # (argocd, vault, monitoring, crypto-wallet-app). This is just the
+    # fallback ArgoCD would use for a resource that omitted one.
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # See k8s/root-app.yaml for why: retry transient failures instead of
+    # leaving the sync failed until the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

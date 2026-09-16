@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: grafana.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # kube-prometheus-stack's Grafana subchart Service, named
+                # after the Helm release ("monitoring-stack", see
+                # k8s/apps/monitoring-app.yaml) — same name bootstrap.sh
+                # already restarts as a Deployment in Step 9.
+                name: monitoring-stack-grafana
+                port:
+                  number: 80

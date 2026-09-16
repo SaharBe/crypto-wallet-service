@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+  annotations:
+    # argocd-server terminates TLS on its Service port (443) itself, even on
+    # what looks like a plain HTTP path — nginx has to speak TLS to the
+    # backend or every request comes back 502. This is the standard
+    # ingress-nginx-without-passthrough setup documented at
+    # https://argo-cd.readthedocs.io/en/stable/operator-manual/ingress/
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 443

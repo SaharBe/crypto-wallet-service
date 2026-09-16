@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Each Ingress below sets its own metadata.namespace — they target four
+# different namespaces (argocd, vault, monitoring, crypto-wallet-app) — so
+# there's no global `namespace:` override here.
+resources:
+  - argocd-ingress.yaml
+  - vault-ingress.yaml
+  - grafana-ingress.yaml
+  - wallet-ingress.yaml

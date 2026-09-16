@@ -263,9 +263,30 @@ echo -e "\n🔹 Step 10: Waiting for kyverno-policies to sync ClusterPolicy obje
 # left in the script to explain why.
 wait_for_application "kyverno-policies"
 
+echo -e "\n🔹 Step 11: Waiting for the ingress Applications and setting up local DNS..."
+# ingress-nginx is a wave-0 app like vault/external-secrets/kafka (not waited
+# on until now — nothing upstream of it depended on it being ready), and
+# `ingress` (the actual Ingress objects) is wave "1" behind it — see
+# k8s/apps/ingress-app.yaml for why. Both need to be healthy before the
+# hostnames below mean anything.
+for app in "ingress-nginx" "ingress"; do
+  wait_for_application "$app"
+done
+
+# Best-effort: a fresh machine may not have run `make setup-hosts` yet, and
+# this step needs sudo if /etc/hosts isn't user-writable — don't fail the
+# whole bootstrap over it, just tell the operator to run it themselves.
+./scripts/setup-hosts.sh || echo "⚠️  Could not update /etc/hosts automatically — run 'make setup-hosts' manually."
+
 echo -e "\n=================================================="
 echo "✅ Bootstrap script completed successfully!"
 echo "=================================================="
+
+echo -e "\n🌐 Local service URLs (run 'make ingress-forward' in another terminal first):"
+printf "  %-14s %s\n" "ArgoCD"   "http://argocd.local:8080"
+printf "  %-14s %s\n" "Grafana"  "http://grafana.local:8080"
+printf "  %-14s %s\n" "Vault"    "http://vault.local:8080"
+printf "  %-14s %s\n" "Wallet"   "http://wallet.local:8080"
 
 END_TIME=$SECONDS
 DURATION=$((END_TIME - START_TIME))

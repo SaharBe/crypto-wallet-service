@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wallet
+  namespace: crypto-wallet-app
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: wallet.local
+      http:
+        paths:
+          # No rewrite-target needed: the frontend's own nginx
+          # (services/frontend/nginx/default.conf.template) already proxies
+          # /api/wallet/* and /api/order/* internally, so the Ingress just
+          # forwards the whole path straight through.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

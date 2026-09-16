@@ -1,3 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 5Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +18,12 @@ metadata:
     app: postgres
 spec:
   replicas: 1
+  # A ReadWriteOnce EBS volume can only be attached to one node at a time —
+  # Recreate avoids the new Pod getting stuck waiting on a volume the old
+  # Pod (on a different node) hasn't released yet, which is what
+  # RollingUpdate's default "bring up the new one first" would risk here.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -24,17 +42,30 @@ spec:
           value: "mypassword"
         - name: POSTGRES_DB
           value: "mydb"
+        # Subdirectory, not the mount point itself: a freshly provisioned
+        # EBS volume is ext4-formatted with a `lost+found` directory already
+        # in it, which trips initdb's "directory exists but is not empty"
+        # check on first boot. This is the fix the official postgres image
+        # docs themselves recommend for exactly this case.
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
         ports:
         - containerPort: 5432
-        # 1. Mount the initialization directory into the container
         volumeMounts:
+        # 1. Mount the initialization directory into the container
         - name: postgres-init-volume
           mountPath: /docker-entrypoint-initdb.d
-      # 2. Define the volume using the ConfigMap you created
+        # 2. Persist actual database files across Pod restarts/reschedules
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
       volumes:
+      # 3. Define the volume using the ConfigMap you created
       - name: postgres-init-volume
         configMap:
           name: postgres-init-db-script
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: postgres-data
 ---
 apiVersion: v1
 kind: Service

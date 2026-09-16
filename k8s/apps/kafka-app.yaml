@@ -36,8 +36,14 @@ spec:
         # for a learning setup (default is 3 controller-only + 0 broker nodes).
         controller:
           replicaCount: 1
+          # Was `enabled: false` (ephemeral, container filesystem only) —
+          # the cluster had no working block-storage provisioner until
+          # terraform/infra/ebs-csi.tf installed the aws-ebs-csi-driver
+          # addon and k8s/apps/ebs-storageclass.yaml added a CSI-backed
+          # StorageClass. 8Gi is the chart's own default size.
           persistence:
-            enabled: false
+            enabled: true
+            storageClass: "gp3"
           # NOTE: this chart version has no `extraConfig` key - it's silently
           # ignored by Helm (unknown values keys don't error), which is why
           # these settings were never actually reaching server.properties.

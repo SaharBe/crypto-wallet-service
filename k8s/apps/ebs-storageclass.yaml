@@ -1,0 +1,23 @@
+# The cluster's pre-existing `gp2` StorageClass points at the legacy
+# in-tree `kubernetes.io/aws-ebs` provisioner, which Kubernetes removed in
+# 1.23+ (this cluster runs 1.31) — any PVC against it sits Pending forever.
+# terraform/infra/ebs-csi.tf installs the real aws-ebs-csi-driver addon
+# (ebs.csi.aws.com); this StorageClass is the GitOps-managed counterpart
+# that actually uses it. Named "gp3" (distinct from the untracked, inert
+# "gp2" object already live in the cluster) so applying this can't collide
+# with it — `provisioner` is an immutable field, so reusing the name "gp2"
+# here would fail to apply against the existing object instead of replacing
+# it.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  fsType: ext4

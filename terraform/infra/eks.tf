@@ -25,6 +25,16 @@ module "eks" {
     }
   }
 
+  # IRSA role is defined in ebs-csi.tf (needs this module's own
+  # oidc_provider_arn/cluster_oidc_issuer_url outputs as inputs — see that
+  # file's header for why this doesn't create a dependency cycle).
+  cluster_addons = {
+    aws-ebs-csi-driver = {
+      most_recent              = true
+      service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
+    }
+  }
+
   tags = {
     Environment = "production"
     Project     = "crypto-wallet-idp"

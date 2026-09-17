@@ -1,0 +1,24 @@
+# Config for `yamllint -c .yamllint.yml k8s` (see .github/workflows/pr-checks.yml).
+# Relaxed from yamllint's defaults, which are tuned for hand-written config
+# files, not Kubernetes manifests: manifests commonly exceed 80 chars
+# (image refs, ARNs, FQDNs), omit the `---` document-start marker on
+# single-document files, and several files here intentionally chain
+# multiple `---`-separated documents in one file (order-service.yaml, etc.).
+extends: default
+
+rules:
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+  document-start: disable
+  # kustomization.yaml's top-level `resources:`/`namespace:` keys plus
+  # ArgoCD's `source:`/`destination:` blocks read more clearly with the
+  # extra indent several files here already use.
+  indentation:
+    indent-sequences: consistent
+  truthy:
+    # ArgoCD Helm `values:` blocks are YAML embedded as a literal string,
+    # not parsed as YAML by this file's own structure, so `enabled: true`-
+    # style keys inside them never reach yamllint — this only affects
+    # this repo's own top-level keys, where bare `on`/`off` never appear.
+    check-keys: false

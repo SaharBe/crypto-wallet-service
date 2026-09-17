@@ -1,0 +1,125 @@
+name: PR Checks
+
+# Gate for the feature-branch/PR workflow: every change now lands via a PR
+# against main (see CONTRIBUTING.md) instead of a direct push, so this is
+# where manifest mistakes get caught before ArgoCD's selfHeal — or a real
+# Kyverno rejection — ever sees them.
+on:
+  pull_request:
+    branches: [ main ]
+
+# Read-only: this workflow only renders/validates manifests, it never
+# writes to the repo or touches the live cluster.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  yaml-lint:
+    name: YAML lint (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install yamllint
+        run: pip install --quiet yamllint
+
+      - name: Lint YAML files this PR touches
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}...HEAD" -- '*.yaml' '*.yml')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No YAML files changed — nothing to lint."
+            exit 0
+          fi
+          printf '%s\n' "${files[@]}"
+          yamllint -c .yamllint.yml "${files[@]}"
+
+  kustomize-build:
+    name: Kustomize build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - name: Build every kustomization.yaml in the repo
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' k; do
+            dir=$(dirname "$k")
+            echo "::group::kubectl kustomize $dir"
+            kubectl kustomize "$dir" || status=1
+            echo "::endgroup::"
+          done < <(find k8s -name kustomization.yaml -print0)
+          exit "$status"
+
+  manifest-dry-run:
+    name: Kubernetes manifest dry-run (client-side)
+    runs-on: ubuntu-latest
+    needs: kustomize-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - name: Render every manifest tree and validate it's well-formed
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rendered
+
+          # Kustomize-managed trees.
+          while IFS= read -r -d '' k; do
+            dir=$(dirname "$k")
+            out="/tmp/rendered/$(echo "$dir" | tr '/' '_').yaml"
+            kubectl kustomize "$dir" > "$out"
+          done < <(find k8s -name kustomization.yaml -print0)
+
+          # Plain manifests ArgoCD applies straight from git (the
+          # App-of-Apps root, the standalone Application/ApplicationSet
+          # files under k8s/apps/, and the Kyverno ClusterPolicy).
+          find k8s/apps -maxdepth 1 -name '*.yaml' -exec cat {} + > /tmp/rendered/apps-root.yaml
+          cat k8s/apps/kyverno-policies/*.yaml > /tmp/rendered/kyverno-policies.yaml
+
+          # root-app.yaml's ${REPO_URL} is filled in by bootstrap.sh
+          # (envsubst) before it's ever applied for real — see that
+          # file's own header comment. Substitute a placeholder here so
+          # dry-run sees valid YAML instead of a literal, unexpanded
+          # token in a URL field.
+          REPO_URL='https://example.invalid/placeholder.git' \
+            envsubst < k8s/root-app.yaml > /tmp/rendered/root-app.yaml
+
+          status=0
+          for f in /tmp/rendered/*.yaml; do
+            echo "::group::dry-run $f"
+            kubectl apply --dry-run=client -f "$f" -o name || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+  helm-values-check:
+    name: Validate Helm values on ArgoCD Application manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.1'
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: helm template every chart-sourced Application's chart + values
+        run: python3 scripts/ci/validate_argocd_helm_apps.py k8s/apps

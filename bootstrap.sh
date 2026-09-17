@@ -101,6 +101,25 @@ until kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server 2>&1 | 
 done
 kubectl wait pod -n argocd -l app.kubernetes.io/name=argocd-server --for=condition=Ready --timeout=180s
 
+# argocd-server's default mode terminates its own self-signed TLS
+# internally and marks its session cookie `Secure` accordingly — fine
+# behind SSL passthrough, but this project fronts it with a plain-HTTP
+# Ingress (k8s/apps/ingress/argocd-ingress.yaml, reachable at
+# argocd.local:8080 via `make ingress-forward`). Per RFC 6265, browsers
+# refuse to store or resend a `Secure` cookie over a non-HTTPS connection —
+# confirmed live: the UI's login POST returned 200 with a valid token, but
+# the cookie never actually landed in the browser, so every request after
+# login came back unauthenticated and bounced straight back to the login
+# screen. Looked exactly like a wrong password; it wasn't.
+# `server.insecure` makes argocd-server serve plain HTTP internally instead
+# (matching the Ingress's port 80 backend, see that manifest's comment) and
+# stop marking the cookie Secure, so the plain-HTTP path actually works
+# end to end. Patched via `kubectl patch`, not `apply`, so a future re-run
+# of the `install.yaml` apply above won't reset it back to unset — same
+# mechanism the admin.password patch below already relies on.
+echo -e "\n🔹 Disabling argocd-server's internal TLS (fronted by a plain-HTTP Ingress — see argocd-ingress.yaml)..."
+kubectl patch cm argocd-cmd-params-cm -n argocd --type merge -p '{"data":{"server.insecure":"true"}}'
+
 echo -e "\n🔹 Setting permanent admin password for ArgoCD..."
 # Hash generated at runtime from ARGOCD_ADMIN_PASSWORD (secrets.env) rather
 # than a pre-computed hash pasted into this script — a hand-regenerated
@@ -131,41 +150,59 @@ echo -e "\n🔹 Removing the auto-generated initial admin secret (fixed password
 kubectl delete secret argocd-initial-admin-secret -n argocd --ignore-not-found
 
 # Don't just trust the patch — prove admin/$ARGOCD_ADMIN_PASSWORD actually
-# authenticates before bootstrap.sh reports success. Ephemeral port-forward
-# + a direct call to the same REST endpoint the UI's login form posts to
-# (POST /api/v1/session) — not the `argocd` CLI: confirmed live that
-# `argocd login`/`argocd logout` can hang indefinitely on their gRPC dial
-# under a port-forward in this environment (a stuck `argocd logout` here
-# once blocked `make up` forever, past its own timeout logic, since a
-# hung process ignores a loop condition that never gets the chance to
-# re-evaluate). curl's --max-time is an OS-level cap that can't hang.
-echo -e "\n🔹 Verifying ArgoCD admin login with the configured password..."
-kubectl port-forward svc/argocd-server -n argocd 18080:443 >/dev/null 2>&1 &
+# works the way a browser would, before bootstrap.sh reports success.
+# Deliberately NOT just "does the login POST return a token": that alone
+# already passed once while the real session was still completely broken —
+# argocd-server's cookie carried the `Secure` flag (default TLS mode) while
+# the actual browser path was plain HTTP (argocd.local:8080), so browsers
+# silently discarded it per RFC 6265 and every request after login came
+# back unauthenticated. A cookie-jar login + authenticated follow-up
+# request is what actually catches that class of bug — plain http://,
+# matching the real Ingress path, not port 443/-k (argocd-server no longer
+# speaks TLS at all now that server.insecure is set above).
+#
+# Not the `argocd` CLI: confirmed live that `argocd login`/`argocd logout`
+# can hang indefinitely on their gRPC dial under a port-forward in this
+# environment (a stuck `argocd logout` here once blocked `make up` forever,
+# past its own timeout logic, since a hung process ignores a loop condition
+# that never gets the chance to re-evaluate). curl's --max-time is an
+# OS-level cap that can't hang.
+echo -e "\n🔹 Verifying ArgoCD admin login persists a working session (not just a token)..."
+kubectl port-forward svc/argocd-server -n argocd 18080:80 >/dev/null 2>&1 &
 ARGOCD_VERIFY_PF_PID=$!
-ARGOCD_LOGIN_CHECK_FILE=$(mktemp)
-trap 'kill $ARGOCD_VERIFY_PF_PID 2>/dev/null || true; rm -f "$ARGOCD_LOGIN_CHECK_FILE"' EXIT
+ARGOCD_COOKIE_JAR=$(mktemp)
+ARGOCD_USERINFO_FILE=$(mktemp)
+trap 'kill $ARGOCD_VERIFY_PF_PID 2>/dev/null || true; rm -f "$ARGOCD_COOKIE_JAR" "$ARGOCD_USERINFO_FILE"' EXIT
 
 elapsed=0
 while true; do
-  HTTP_CODE=$(curl -sk --max-time 5 -o "$ARGOCD_LOGIN_CHECK_FILE" -w '%{http_code}' -X POST \
-    https://127.0.0.1:18080/api/v1/session \
+  HTTP_CODE=$(curl -s --max-time 5 -c "$ARGOCD_COOKIE_JAR" -o /dev/null -w '%{http_code}' -X POST \
+    http://127.0.0.1:18080/api/v1/session \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"admin\",\"password\":\"${ARGOCD_ADMIN_PASSWORD}\"}" 2>/dev/null || echo "000")
-  if [ "$HTTP_CODE" = "200" ] && grep -q '"token"' "$ARGOCD_LOGIN_CHECK_FILE" 2>/dev/null; then
-    break
+  if [ "$HTTP_CODE" = "200" ] && grep -q 'argocd.token' "$ARGOCD_COOKIE_JAR" 2>/dev/null; then
+    # Login alone isn't enough — confirm the cookie the browser would get
+    # actually authenticates a follow-up request (userinfo replies
+    # {"loggedIn":true,...} when it does, {} when the session didn't stick).
+    curl -s --max-time 5 -b "$ARGOCD_COOKIE_JAR" -o "$ARGOCD_USERINFO_FILE" \
+      http://127.0.0.1:18080/api/v1/session/userinfo 2>/dev/null
+    if grep -q '"loggedIn":true' "$ARGOCD_USERINFO_FILE" 2>/dev/null; then
+      break
+    fi
   fi
   if [ "$elapsed" -ge 60 ]; then
-    echo "❌ Admin login verification failed after ${elapsed}s (last HTTP status: ${HTTP_CODE})."
-    echo "   Check 'kubectl get secret argocd-secret -n argocd -o yaml' and 'kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server'."
+    echo "❌ Admin login session verification failed after ${elapsed}s (last HTTP status: ${HTTP_CODE})."
+    echo "   Check 'kubectl get secret argocd-secret -n argocd -o yaml', 'kubectl get cm argocd-cmd-params-cm -n argocd -o yaml',"
+    echo "   and 'kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server'."
     exit 1
   fi
   sleep 5
   elapsed=$((elapsed + 5))
 done
 kill "$ARGOCD_VERIFY_PF_PID" 2>/dev/null || true
-rm -f "$ARGOCD_LOGIN_CHECK_FILE"
+rm -f "$ARGOCD_COOKIE_JAR" "$ARGOCD_USERINFO_FILE"
 trap - EXIT
-echo "✅ Verified: admin login succeeds with the configured password."
+echo "✅ Verified: admin login establishes a working session with the configured password."
 
 echo -e "\n🔹 Step 4: Seeding the bootstrap-time GitHub repo credential..."
 cat <<EOF | kubectl apply -f -

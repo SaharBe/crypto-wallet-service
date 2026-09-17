@@ -3,13 +3,6 @@ kind: Ingress
 metadata:
   name: argocd-server
   namespace: argocd
-  annotations:
-    # argocd-server terminates TLS on its Service port (443) itself, even on
-    # what looks like a plain HTTP path — nginx has to speak TLS to the
-    # backend or every request comes back 502. This is the standard
-    # ingress-nginx-without-passthrough setup documented at
-    # https://argo-cd.readthedocs.io/en/stable/operator-manual/ingress/
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
 spec:
   ingressClassName: nginx
   rules:
@@ -21,5 +14,21 @@ spec:
             backend:
               service:
                 name: argocd-server
+                # Not port 443 ("https", same target port 8080 under a
+                # misleading name): argocd-server runs with server.insecure
+                # set in argocd-cmd-params-cm (see bootstrap.sh), so it
+                # serves plain HTTP on 8080, not TLS. Before that, this
+                # Ingress had backend-protocol: HTTPS to match — but
+                # argocd-server's default self-signed-TLS mode marks its
+                # session cookie Secure, which browsers (correctly, per RFC
+                # 6265) refuse to store or resend over the plain-HTTP
+                # connection this Ingress actually serves to the client on
+                # argocd.local:8080. Confirmed live: login POST succeeded
+                # and returned a token, but the cookie jar came back empty
+                # and every subsequent request was unauthenticated — the
+                # browser bounced back to the login screen looking like a
+                # wrong password. insecure mode (this port) stops the
+                # Secure flag from being set at all, matching the actual
+                # plain-HTTP path end to end.
                 port:
-                  number: 443
+                  number: 80

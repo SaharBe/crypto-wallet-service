@@ -87,10 +87,24 @@ jobs:
           done < <(find k8s -name kustomization.yaml -print0)
 
           # Plain manifests ArgoCD applies straight from git (the
-          # App-of-Apps root, the standalone Application/ApplicationSet
-          # files under k8s/apps/, and the Kyverno ClusterPolicy).
-          find k8s/apps -maxdepth 1 -name '*.yaml' -exec cat {} + > /tmp/rendered/apps-root.yaml
-          cat k8s/apps/kyverno-policies/*.yaml > /tmp/rendered/kyverno-policies.yaml
+          # standalone Application/ApplicationSet files under k8s/apps/,
+          # and the Kyverno ClusterPolicy). None of these files end in a
+          # `---` document separator, so a plain `cat` risks gluing one
+          # file's last line onto the next file's first line, or merging
+          # two single-document files into one (silently dropping
+          # whichever resource's keys got overwritten) — confirmed this
+          # is not hypothetical: an earlier version of this job's plain
+          # `cat {} +` silently dropped 12 of 18 resources here. Emit an
+          # explicit `---` and a blank line between every file instead.
+          render_concat() {
+            local out="$1"; shift
+            : > "$out"
+            for f in "$@"; do
+              { echo '---'; cat "$f"; echo; } >> "$out"
+            done
+          }
+          render_concat /tmp/rendered/apps-root.yaml k8s/apps/*.yaml
+          render_concat /tmp/rendered/kyverno-policies.yaml k8s/apps/kyverno-policies/*.yaml
 
           # root-app.yaml's ${REPO_URL} is filled in by bootstrap.sh
           # (envsubst) before it's ever applied for real — see that

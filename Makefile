@@ -32,7 +32,7 @@ BASE_URL  ?= http://localhost:8080
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build vault-init test-load setup-hosts ingress-forward
+.PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -49,6 +49,13 @@ down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
 
 setup-hosts: ## Add argocd.local/grafana.local/vault.local/wallet.local to /etc/hosts (sudo if needed)
 	@./scripts/setup-hosts.sh
+
+argocd-password: ## Print the current ArgoCD admin credentials for manual UI login (copy/paste, avoids browser autofill/typo mismatches)
+	@$(LOAD_SECRETS); \
+	: "$${ARGOCD_ADMIN_PASSWORD:?not set — add it to $(SECRETS_ENV) (copy $(SECRETS_ENV).example)}"; \
+	echo "URL:      http://argocd.local:8080  (after 'make ingress-forward')"; \
+	echo "Username: admin"; \
+	echo "Password: $$ARGOCD_ADMIN_PASSWORD"
 
 ingress-forward: ## Port-forward the ingress-nginx controller to localhost:8080 — leave running, then browse *.local:8080 (run `make setup-hosts` first)
 	@echo "🔌 Forwarding svc/ingress-nginx-controller (ingress-nginx ns) -> http://localhost:8080"; \

@@ -1,0 +1,161 @@
+name: PR Checks
+
+# Gate for the feature-branch/PR workflow: every change now lands via a PR
+# against main (see CONTRIBUTING.md) instead of a direct push, so this is
+# where manifest mistakes get caught before ArgoCD's selfHeal — or a real
+# Kyverno rejection — ever sees them.
+on:
+  pull_request:
+    branches: [main]
+
+# Read-only: this workflow only renders/validates manifests, it never
+# writes to the repo or touches the live cluster.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  yaml-lint:
+    name: YAML lint (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install yamllint
+        run: pip install --quiet yamllint
+
+      - name: Lint YAML files this PR touches
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}...HEAD" -- '*.yaml' '*.yml')
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No YAML files changed — nothing to lint."
+            exit 0
+          fi
+          printf '%s\n' "${files[@]}"
+          yamllint -c .yamllint.yml "${files[@]}"
+
+  kustomize-build:
+    name: Kustomize build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - name: Build every kustomization.yaml in the repo
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r -d '' k; do
+            dir=$(dirname "$k")
+            echo "::group::kubectl kustomize $dir"
+            kubectl kustomize "$dir" || status=1
+            echo "::endgroup::"
+          done < <(find k8s -name kustomization.yaml -print0)
+          exit "$status"
+
+  manifest-dry-run:
+    name: Kubernetes manifest schema validation (offline, no cluster)
+    runs-on: ubuntu-latest
+    needs: kustomize-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Render every manifest tree
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rendered
+
+          # Kustomize-managed trees.
+          while IFS= read -r -d '' k; do
+            dir=$(dirname "$k")
+            out="/tmp/rendered/$(echo "$dir" | tr '/' '_').yaml"
+            kubectl kustomize "$dir" > "$out"
+          done < <(find k8s -name kustomization.yaml -print0)
+
+          # Plain manifests ArgoCD applies straight from git (the
+          # standalone Application/ApplicationSet files under k8s/apps/,
+          # and the Kyverno ClusterPolicy). None of these files end in a
+          # `---` document separator, so a plain `cat` risks gluing one
+          # file's last line onto the next file's first line, or merging
+          # two single-document files into one (silently dropping
+          # whichever resource's keys got overwritten) — confirmed this
+          # is not hypothetical: an earlier version of this job's plain
+          # `cat {} +` silently dropped 12 of 18 resources here. Emit an
+          # explicit `---` and a blank line between every file instead.
+          render_concat() {
+            local out="$1"; shift
+            : > "$out"
+            for f in "$@"; do
+              { echo '---'; cat "$f"; echo; } >> "$out"
+            done
+          }
+          render_concat /tmp/rendered/apps-root.yaml k8s/apps/*.yaml
+          render_concat /tmp/rendered/kyverno-policies.yaml k8s/apps/kyverno-policies/*.yaml
+
+          # root-app.yaml's ${REPO_URL} is filled in by bootstrap.sh
+          # (envsubst) before it's ever applied for real — see that
+          # file's own header comment. Substitute a placeholder here so
+          # dry-run sees valid YAML instead of a literal, unexpanded
+          # token in a URL field.
+          REPO_URL='https://example.invalid/placeholder.git' \
+            envsubst < k8s/root-app.yaml > /tmp/rendered/root-app.yaml
+
+      - name: Validate against Kubernetes + CRD schemas (kubeconform)
+        run: |
+          set -euo pipefail
+          # `kubectl apply --dry-run=client` was tried here first and
+          # doesn't work on a cluster-less runner: even with
+          # --validate=false it still calls out for live API discovery to
+          # map each `kind` to a REST resource ("couldn't get current
+          # server API group list ... connection refused") — confirmed
+          # the hard way, it only ever passed locally because that
+          # machine had a real kubeconfig pointing at a live cluster.
+          # kubeconform needs no cluster at all: it validates structurally
+          # against bundled upstream OpenAPI schemas for built-in kinds,
+          # and — via the second -schema-location — against the
+          # datreeio/CRDs-catalog project's schemas for this repo's CRDs
+          # (ArgoCD Application/ApplicationSet, external-secrets,
+          # Kyverno ClusterPolicy), all fetched from static, unauthenticated
+          # URLs rather than a running API server.
+          crd_catalog='https://raw.githubusercontent.com/datreeio'
+          crd_catalog+='/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location "$crd_catalog" \
+            /tmp/rendered/*.yaml
+
+  helm-values-check:
+    name: Validate Helm values on ArgoCD Application manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.1'
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: helm template every chart-sourced Application's chart + values
+        run: python3 scripts/ci/validate_argocd_helm_apps.py k8s/apps

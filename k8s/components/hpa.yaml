@@ -1,0 +1,70 @@
+# HorizontalPodAutoscalers for the backend/frontend Deployments in this
+# Kustomization. Requires metrics-server (k8s/apps/metrics-server-app.yaml)
+# for the `metrics.k8s.io` API HPA polls for CPU utilization — without it
+# these sit at "unknown"/no scaling (`kubectl describe hpa` shows
+# FailedGetResourceMetric) until metrics-server is up.
+#
+# ArgoCD's crypto-wallet-app Application (selfHeal: true) would otherwise
+# fight the HPA over spec.replicas on every sync, resetting it back to the
+# Deployment manifest's static value; k8s/apps/crypto-wallet-appset.yaml
+# has a matching `ignoreDifferences` entry per Deployment so ArgoCD leaves
+# the live replica count to the HPA once it's set one.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+  namespace: crypto-wallet-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: wallet-service
+  namespace: crypto-wallet-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: wallet-service
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend
+  namespace: crypto-wallet-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

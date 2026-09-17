@@ -1,0 +1,60 @@
+# Resource-metrics API (metrics.k8s.io) for the cluster — required by the
+# HorizontalPodAutoscalers in k8s/components/hpa.yaml (`kubectl top` and
+# HPA's CPU-utilization checks both read from this). Not part of the
+# kube-prometheus-stack Application (k8s/apps/monitoring-app.yaml): that
+# chart ships Prometheus scraping /metrics text endpoints, not the
+# metrics.k8s.io aggregated-API-server metrics-server implements — the two
+# are unrelated metrics pipelines.
+#
+# Deployed into kube-system, which k8s/apps/kyverno-policies/
+# disallow-missing-limits.yaml already excludes, so no explicit
+# resources.limits override is required for Kyverno — set anyway, to match
+# this repo's convention for every other Helm-installed addon.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metrics-server
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes-sigs.github.io/metrics-server/
+    chart: metrics-server
+    targetRevision: 3.14.0
+    helm:
+      values: |
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 200m
+            memory: 300Mi
+        # Verified against this cluster (EKS 1.31, default aws-vpc-cni):
+        # the kubelet serving certs validate fine with the chart's default
+        # (verified) TLS settings, so --kubelet-insecure-tls is not needed
+        # here — leave the default secure-TLS behavior in place. (This is
+        # the flag EKS clusters commonly need when the kubelet cert's SANs
+        # don't cover the address metrics-server connects on; if a future
+        # node group or CNI change ever puts pods back on that path,
+        # `kubectl logs -n kube-system -l app.kubernetes.io/name=metrics-server`
+        # will show x509 validation errors and it can be added back.)
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # See k8s/root-app.yaml for why: retry transient failures instead of
+    # leaving the sync failed until the next selfHeal pass.
+    retry:
+      limit: 10
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

@@ -60,6 +60,32 @@ spec:
       destination:
         server: 'https://kubernetes.default.svc'
         namespace: '{{ .namespace }}'
+      # order-service/wallet-service/frontend are now scaled by HPAs
+      # (k8s/components/hpa.yaml) that write spec.replicas directly.
+      # Without this, selfHeal reverts every HPA-driven scale-up back to
+      # the Deployment manifest's static replica count on the next sync
+      # pass, fighting the autoscaler. Named per-Deployment rather than a
+      # blanket apps/Deployment rule so postgres (no HPA) still gets
+      # selfHeal on its replica count as normal.
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          name: order-service
+          namespace: crypto-wallet-app
+          jsonPointers:
+            - /spec/replicas
+        - group: apps
+          kind: Deployment
+          name: wallet-service
+          namespace: crypto-wallet-app
+          jsonPointers:
+            - /spec/replicas
+        - group: apps
+          kind: Deployment
+          name: frontend
+          namespace: crypto-wallet-app
+          jsonPointers:
+            - /spec/replicas
       syncPolicy:
         automated:
           prune: true

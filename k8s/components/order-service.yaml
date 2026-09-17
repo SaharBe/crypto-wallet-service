@@ -21,11 +21,11 @@ spec:
         imagePullPolicy: Always
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
+            memory: "192Mi"
+            cpu: "150m"
           limits:
-            memory: "256Mi"
-            cpu: "200m"
+            memory: "384Mi"
+            cpu: "500m"
         ports:
         - containerPort: 3000
         
@@ -52,12 +52,20 @@ spec:
             port: 3000
           initialDelaySeconds: 10
           periodSeconds: 15
+          # k6 spike-test.js (0->300 VUs in 15s) showed "context deadline
+          # exceeded" Unhealthy events at the default 1s timeout under CPU
+          # contention — the process was still up and answering, just not
+          # inside 1s. Verified against this cluster: with the HPA
+          # (k8s/components/hpa.yaml) and the higher CPU limit above, 5s
+          # gives it enough room to answer before the probe gives up.
+          timeoutSeconds: 5
         readinessProbe:
           httpGet:
             path: /health
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 10
+          timeoutSeconds: 5
 
 ---
 apiVersion: v1

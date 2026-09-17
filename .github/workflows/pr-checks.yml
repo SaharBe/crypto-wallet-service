@@ -6,7 +6,7 @@ name: PR Checks
 # Kyverno rejection — ever sees them.
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 # Read-only: this workflow only renders/validates manifests, it never
 # writes to the repo or touches the live cluster.
@@ -64,7 +64,7 @@ jobs:
           exit "$status"
 
   manifest-dry-run:
-    name: Kubernetes manifest dry-run (client-side)
+    name: Kubernetes manifest dry-run (offline, no cluster)
     runs-on: ubuntu-latest
     needs: kustomize-build
     steps:
@@ -100,10 +100,20 @@ jobs:
           REPO_URL='https://example.invalid/placeholder.git' \
             envsubst < k8s/root-app.yaml > /tmp/rendered/root-app.yaml
 
+          # This runner has no cluster/kubeconfig, and `--dry-run=client`
+          # alone still tries to fetch the live OpenAPI schema to validate
+          # against unless told not to (confirmed the hard way: this
+          # passed locally only because that machine had a real
+          # kubeconfig pointing at a cluster, then failed in CI with
+          # "dial tcp [::1]:8080: connect: connection refused"). With
+          # --validate=false this is a structural check only — is every
+          # document well-formed, does it have apiVersion/kind/metadata —
+          # not a schema check; kustomize-build above already exercises
+          # cross-resource references within each kustomization.
           status=0
           for f in /tmp/rendered/*.yaml; do
             echo "::group::dry-run $f"
-            kubectl apply --dry-run=client -f "$f" -o name || status=1
+            kubectl apply --dry-run=client --validate=false -f "$f" -o name || status=1
             echo "::endgroup::"
           done
           exit "$status"

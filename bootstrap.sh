@@ -17,8 +17,14 @@ source secrets.env
 
 # Single source of truth for the platform's Git repo URL (secrets.env).
 : "${REPO_URL:?REPO_URL must be set in secrets.env — see secrets.env.example}"
+: "${ARGOCD_ADMIN_PASSWORD:?ARGOCD_ADMIN_PASSWORD must be set in secrets.env — see secrets.env.example}"
 if ! command -v envsubst >/dev/null 2>&1; then
   echo "❌ envsubst not found. Install the 'gettext' package (provides envsubst)."
+  exit 1
+fi
+if ! command -v argocd >/dev/null 2>&1; then
+  echo "❌ argocd CLI not found. Install it (https://argo-cd.readthedocs.io/en/stable/cli_installation/) —"
+  echo "   Step 3 uses it to hash ARGOCD_ADMIN_PASSWORD and to verify the admin login actually works."
   exit 1
 fi
 
@@ -96,11 +102,20 @@ done
 kubectl wait pod -n argocd -l app.kubernetes.io/name=argocd-server --for=condition=Ready --timeout=180s
 
 echo -e "\n🔹 Setting permanent admin password for ArgoCD..."
+# Hash generated at runtime from ARGOCD_ADMIN_PASSWORD (secrets.env) rather
+# than a pre-computed hash pasted into this script — a hand-regenerated
+# hash has silently drifted from the intended plaintext before (confirmed
+# live: previous sessions' hardcoded hashes required manual bcrypt
+# recomputation every time the password changed, with no way to catch a
+# mistake until someone actually tried to log in). ARGOCD_ADMIN_HASH is a
+# real bash variable, so its `$`-prefixed bcrypt segments (e.g. "$2b$10$...")
+# are substituted verbatim below — not re-parsed as shell expansions.
+ARGOCD_ADMIN_HASH=$(argocd account bcrypt --password "$ARGOCD_ADMIN_PASSWORD")
 kubectl patch secret argocd-secret -n argocd \
-  -p '{"stringData": {
-    "admin.password": "$2b$10$hBNWpw.ONTDCve3z1hPRu.06vXH.eIf5jSsN7keVk3UJ86FlqZBDS",
-    "admin.passwordMtime": "2026-07-14T12:00:00Z"
-  }}'
+  -p "{\"stringData\": {
+    \"admin.password\": \"${ARGOCD_ADMIN_HASH}\",
+    \"admin.passwordMtime\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+  }}"
 
 kubectl rollout restart deployment argocd-server -n argocd
 kubectl rollout status deployment argocd-server -n argocd
@@ -115,8 +130,32 @@ kubectl rollout status deployment argocd-server -n argocd
 echo -e "\n🔹 Removing the auto-generated initial admin secret (fixed password patch above supersedes it)..."
 kubectl delete secret argocd-initial-admin-secret -n argocd --ignore-not-found
 
-echo -e "\n🔹 Getting permanent admin password for ArgoCD:"
-kubectl get secret argocd-secret -n argocd -o yaml
+# Don't just trust the patch — prove admin/$ARGOCD_ADMIN_PASSWORD actually
+# authenticates, the same way a human would (`argocd login`), before
+# bootstrap.sh reports success. Ephemeral port-forward + login attempt,
+# retried: argocd-server's settings reload after the restart above isn't
+# always instant.
+echo -e "\n🔹 Verifying ArgoCD admin login with the configured password..."
+kubectl port-forward svc/argocd-server -n argocd 18080:443 >/dev/null 2>&1 &
+ARGOCD_VERIFY_PF_PID=$!
+trap 'kill $ARGOCD_VERIFY_PF_PID 2>/dev/null || true' EXIT
+
+elapsed=0
+until argocd login 127.0.0.1:18080 --insecure --username admin --password "$ARGOCD_ADMIN_PASSWORD" >/dev/null 2>&1; do
+  if [ "$elapsed" -ge 60 ]; then
+    echo "❌ 'argocd login' with the configured admin password failed after ${elapsed}s."
+    echo "   Check 'kubectl get secret argocd-secret -n argocd -o yaml' and 'kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server'."
+    kill "$ARGOCD_VERIFY_PF_PID" 2>/dev/null || true
+    trap - EXIT
+    exit 1
+  fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+argocd logout 127.0.0.1:18080 >/dev/null 2>&1 || true
+kill "$ARGOCD_VERIFY_PF_PID" 2>/dev/null || true
+trap - EXIT
+echo "✅ Verified: admin login succeeds with the configured password."
 
 echo -e "\n🔹 Step 4: Seeding the bootstrap-time GitHub repo credential..."
 cat <<EOF | kubectl apply -f -

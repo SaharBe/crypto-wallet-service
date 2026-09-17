@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: wallet-service
-          image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/wallet-service:50f98e400315912ec72da338e06a412a93f66e79
+          image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/wallet-service:001ddc0beaec474ef6349ccda6d1ada365fe34fa
           imagePullPolicy: Always
           resources:
             requests:

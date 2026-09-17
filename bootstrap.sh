@@ -131,29 +131,39 @@ echo -e "\n🔹 Removing the auto-generated initial admin secret (fixed password
 kubectl delete secret argocd-initial-admin-secret -n argocd --ignore-not-found
 
 # Don't just trust the patch — prove admin/$ARGOCD_ADMIN_PASSWORD actually
-# authenticates, the same way a human would (`argocd login`), before
-# bootstrap.sh reports success. Ephemeral port-forward + login attempt,
-# retried: argocd-server's settings reload after the restart above isn't
-# always instant.
+# authenticates before bootstrap.sh reports success. Ephemeral port-forward
+# + a direct call to the same REST endpoint the UI's login form posts to
+# (POST /api/v1/session) — not the `argocd` CLI: confirmed live that
+# `argocd login`/`argocd logout` can hang indefinitely on their gRPC dial
+# under a port-forward in this environment (a stuck `argocd logout` here
+# once blocked `make up` forever, past its own timeout logic, since a
+# hung process ignores a loop condition that never gets the chance to
+# re-evaluate). curl's --max-time is an OS-level cap that can't hang.
 echo -e "\n🔹 Verifying ArgoCD admin login with the configured password..."
 kubectl port-forward svc/argocd-server -n argocd 18080:443 >/dev/null 2>&1 &
 ARGOCD_VERIFY_PF_PID=$!
-trap 'kill $ARGOCD_VERIFY_PF_PID 2>/dev/null || true' EXIT
+ARGOCD_LOGIN_CHECK_FILE=$(mktemp)
+trap 'kill $ARGOCD_VERIFY_PF_PID 2>/dev/null || true; rm -f "$ARGOCD_LOGIN_CHECK_FILE"' EXIT
 
 elapsed=0
-until argocd login 127.0.0.1:18080 --insecure --username admin --password "$ARGOCD_ADMIN_PASSWORD" >/dev/null 2>&1; do
+while true; do
+  HTTP_CODE=$(curl -sk --max-time 5 -o "$ARGOCD_LOGIN_CHECK_FILE" -w '%{http_code}' -X POST \
+    https://127.0.0.1:18080/api/v1/session \
+    -H 'Content-Type: application/json' \
+    -d "{\"username\":\"admin\",\"password\":\"${ARGOCD_ADMIN_PASSWORD}\"}" 2>/dev/null || echo "000")
+  if [ "$HTTP_CODE" = "200" ] && grep -q '"token"' "$ARGOCD_LOGIN_CHECK_FILE" 2>/dev/null; then
+    break
+  fi
   if [ "$elapsed" -ge 60 ]; then
-    echo "❌ 'argocd login' with the configured admin password failed after ${elapsed}s."
+    echo "❌ Admin login verification failed after ${elapsed}s (last HTTP status: ${HTTP_CODE})."
     echo "   Check 'kubectl get secret argocd-secret -n argocd -o yaml' and 'kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server'."
-    kill "$ARGOCD_VERIFY_PF_PID" 2>/dev/null || true
-    trap - EXIT
     exit 1
   fi
   sleep 5
   elapsed=$((elapsed + 5))
 done
-argocd logout 127.0.0.1:18080 >/dev/null 2>&1 || true
 kill "$ARGOCD_VERIFY_PF_PID" 2>/dev/null || true
+rm -f "$ARGOCD_LOGIN_CHECK_FILE"
 trap - EXIT
 echo "✅ Verified: admin login succeeds with the configured password."
 

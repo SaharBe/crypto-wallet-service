@@ -1,0 +1,24 @@
+# Kind cluster config for the `k6-performance-sanity` job
+# (.github/workflows/pr-checks.yml). Maps the host's ports 80/443 straight
+# into the node, and labels it `ingress-ready=true` — exactly the setup
+# ingress-nginx's own Kind-provider manifest expects (see
+# https://kind.sigs.k8s.io/docs/user/ingress/). This lets the k6 run hit
+# ingress-nginx directly at http://localhost, with no port-forward process
+# to manage in CI.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP

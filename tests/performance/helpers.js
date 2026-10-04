@@ -4,6 +4,23 @@
 
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 
+// BASE_URL defaults to the ingress-nginx port-forward (`make ingress-forward`,
+// http://localhost:8080), not a Service name, so there's no DNS to tell
+// ingress-nginx which virtual host to route on. The wallet Ingress
+// (k8s/apps/ingress/wallet-ingress.yaml) only matches `host: wallet.local`,
+// so every request needs that explicit Host header or ingress-nginx 404s.
+// Override with HOST_HEADER=<value>, or HOST_HEADER='' to send none — e.g.
+// when pointing BASE_URL at the frontend Service directly (run-in-cluster.sh,
+// or `kubectl port-forward svc/frontend`), where the frontend's nginx
+// (server_name _) and backends ignore Host entirely, so leaving the default
+// in place there is harmless too.
+const HOST_HEADER = __ENV.HOST_HEADER !== undefined ? __ENV.HOST_HEADER : 'wallet.local';
+
+// Merges the shared Host header (if any) into a request's own headers.
+export function withHost(headers = {}) {
+  return HOST_HEADER ? { ...headers, Host: HOST_HEADER } : headers;
+}
+
 const COINS = ['BTC', 'ETH', 'SOL', 'USDT'];
 const ACTIONS = ['buy', 'sell'];
 

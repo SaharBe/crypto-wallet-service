@@ -27,8 +27,8 @@ bug in the script.
 ## Running
 
 ```bash
-# Local: needs a port-forward first
-kubectl port-forward svc/frontend 8080:80 -n crypto-wallet-app &
+# Local: through the Ingress Controller (realistic L7 path — see root README)
+make ingress-forward &                            # port-forwards ingress-nginx to localhost:8080
 make test-load                                    # load-test.js, local k6 (or Docker if k6 isn't installed)
 make test-load K6_SCRIPT=spike-test.js
 make test-load K6_SCRIPT=kafka-pipeline-stress.js
@@ -36,6 +36,15 @@ make test-load K6_SCRIPT=kafka-pipeline-stress.js
 # In-cluster: ephemeral k6 Pod, no port-forward, hits the frontend Service directly
 make test-load K6_MODE=cluster K6_SCRIPT=spike-test.js
 ```
+
+All three scripts send an explicit `Host: wallet.local` header (see
+`helpers.js`) so that, when BASE_URL points at the ingress-nginx
+port-forward, ingress-nginx routes the request to the `wallet` Ingress
+instead of 404ing — there's no DNS on `localhost:8080` to convey which
+virtual host is being requested. Override the target with `BASE_URL=...`,
+or the header itself with `HOST_HEADER=...` (`HOST_HEADER=''` sends none),
+e.g. when pointing at a direct `kubectl port-forward svc/frontend` instead,
+where it's unnecessary but harmless.
 
 `kafka-pipeline-stress.js`'s rate is tunable: `k6 run -e ORDERS_PER_SEC=100 kafka-pipeline-stress.js`.
 

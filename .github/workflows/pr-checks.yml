@@ -159,3 +159,108 @@ jobs:
 
       - name: helm template every chart-sourced Application's chart + values
         run: python3 scripts/ci/validate_argocd_helm_apps.py k8s/apps
+
+  k6-performance-sanity:
+    name: k6 performance sanity (Kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v4
+
+      # extraPortMappings (k8s/overlays/ci/kind-config.yaml) put
+      # ingress-nginx on http://localhost once it's installed below — no
+      # port-forward process to background and manage in CI.
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          version: v0.24.0
+          node_image: kindest/node:v1.31.2
+          cluster_name: ci
+          config: k8s/overlays/ci/kind-config.yaml
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.1'
+
+      - name: Install ingress-nginx (Kind provider manifest)
+        run: |
+          set -euo pipefail
+          ingress_manifest='https://raw.githubusercontent.com/kubernetes/ingress-nginx'
+          ingress_manifest+='/controller-v1.11.3/deploy/static/provider/kind/deploy.yaml'
+          kubectl apply -f "$ingress_manifest"
+          echo "⌛ Waiting for the ingress-nginx controller to become ready..."
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=180s
+
+      # Same chart/version as k8s/apps/kafka-app.yaml (installed there via
+      # ArgoCD against the real cluster) — just without persistence, since
+      # Kind has no `gp3` StorageClass and this cluster doesn't outlive the
+      # job. See k8s/overlays/ci/kafka-ci-values.yaml.
+      - name: Install a standalone Kafka broker
+        run: |
+          set -euo pipefail
+          helm install kafka oci://registry-1.docker.io/bitnamicharts/kafka \
+            --version 32.4.3 \
+            --namespace kafka --create-namespace \
+            -f k8s/overlays/ci/kafka-ci-values.yaml \
+            --wait --timeout 5m
+
+      # The committed manifests pin wallet-service/order-service/frontend to
+      # private ECR images — a PR-triggered job has no AWS credentials to
+      # pull those with, and they only ever hold whatever was last merged,
+      # never this PR's own changes. Build from the PR's source instead and
+      # load straight into the Kind node's image store (no registry round
+      # trip); k8s/overlays/ci retags the Deployments onto these images
+      # with imagePullPolicy: IfNotPresent so kubelet doesn't try ECR.
+      - name: Build service images from PR source and load into Kind
+        run: |
+          set -euo pipefail
+          declare -A services=(
+            [wallet-service]=services/wallet-service
+            [order-service]=services/order-service
+            [frontend]=services/frontend
+          )
+          for svc in "${!services[@]}"; do
+            echo "📦 Building ${svc}..."
+            docker build -t "crypto-wallet-app/${svc}:ci" "${services[$svc]}"
+            kind load docker-image "crypto-wallet-app/${svc}:ci" --name ci
+          done
+
+      # k8s/overlays/ci swaps the Vault-backed ExternalSecret for a plain
+      # Secret and repoints Postgres off the `gp3` StorageClass — see that
+      # overlay's kustomization.yaml for why.
+      - name: Deploy crypto-wallet-app
+        run: |
+          set -euo pipefail
+          kubectl apply -k k8s/overlays/ci
+          echo "⌛ Waiting for crypto-wallet-app Deployments to become available..."
+          kubectl wait --for=condition=available deployment --all \
+            -n crypto-wallet-app --timeout=300s
+
+      - name: Apply the wallet Ingress (wallet.local -> frontend)
+        run: kubectl apply -f k8s/apps/ingress/wallet-ingress.yaml
+
+      - uses: grafana/setup-k6-action@v1
+
+      # BASE_URL=http://localhost hits ingress-nginx via the Kind
+      # extraPortMappings above (port 80, no port-forward). HOST_HEADER
+      # already defaults to wallet.local (tests/performance/helpers.js),
+      # matching the wallet Ingress's host rule, so it's left unset here.
+      - name: Run k6 load test through ingress-nginx
+        run: make test-load K6_SCRIPT=load-test.js BASE_URL=http://localhost
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl describe nodes
+          kubectl get pods -A
+          kubectl describe pods -n crypto-wallet-app
+          kubectl logs -n crypto-wallet-app -l app=wallet-service --tail=200 || true
+          kubectl logs -n crypto-wallet-app -l app=order-service --tail=200 || true

@@ -22,6 +22,7 @@ team would do it.
 - [Prerequisites](#prerequisites)
 - [Setup Guide](#setup-guide)
 - [Operations & Makefile Commands](#operations--makefile-commands)
+- [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
 
 ## Architecture
@@ -185,6 +186,28 @@ Watch replica counts climb under `load-test.js`'s 3-minute ramp, and watch
 for `Pending`/restarting pods if a spike (`spike-test.js`) outruns the
 cluster's capacity — see [tests/performance/README.md](tests/performance/README.md)
 for what to look at in Grafana alongside it.
+
+## CI/CD
+
+Every PR against `main` runs [PR Checks](.github/workflows/pr-checks.yml).
+Alongside the static checks (YAML lint, `kustomize build`, `kubeconform`,
+`helm template`), a `k6-performance-sanity` job now validates real
+performance before merge: it spins up a throwaway Kind cluster, builds the
+PR's own `services/*` images from source and loads them straight in (no
+ECR credentials needed, and it's actually testing this PR's code, not
+whatever's already deployed), installs `ingress-nginx` and a single-node
+Kafka broker, deploys the app via the CI-only overlay in
+[k8s/overlays/ci](k8s/overlays/ci), and runs
+[`tests/performance/load-test.js`](tests/performance/load-test.js) through
+`ingress-nginx` with the same `Host: wallet.local` routing used locally
+(`make ingress-forward` + `make test-load`). The PR fails if that script's
+SLOs (`p95 < 200ms`, error rate `< 1%`) aren't met.
+
+The Kind overlay necessarily diverges from prod in a couple of spots a
+fresh cluster can't provide: a plain Secret stands in for the Vault-backed
+`ExternalSecret`, and Postgres targets Kind's built-in `standard`
+StorageClass instead of `gp3`. See that overlay's `kustomization.yaml` and
+the job itself for the reasoning.
 
 ## Autoscaling & Resilience Strategy
 

@@ -1,0 +1,112 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# CI-only overlay for the `k6-performance-sanity` job
+# (.github/workflows/pr-checks.yml). A fresh, ephemeral Kind cluster has
+# neither Vault/External Secrets Operator nor a `gp3` (EBS) StorageClass,
+# so this overlay deletes k8s/components/external-secret.yaml's
+# ClusterSecretStore + ExternalSecret (those CRDs don't exist on Kind —
+# applying them would just fail outright) and adds the plain Secret in
+# ci-db-secret.yaml instead, carrying the same keys Postgres
+# (postgres.yaml) is already seeded with. The Postgres PVC is repointed at
+# Kind's built-in `standard` StorageClass via the patch below. Everything
+# else here is identical to k8s/components.
+#
+# Kafka is not part of this overlay — the CI job installs it separately
+# with Helm, using the same chart/version as k8s/apps/kafka-app.yaml, just
+# with persistence disabled (see k8s/overlays/ci/kafka-ci-values.yaml).
+#
+# The three Deployments below also get retagged off the private ECR
+# images (which a PR-triggered job has no credentials for, and which
+# only ever hold whatever was last merged, not this PR's own changes) to
+# images the CI job builds from source and loads straight into Kind — see
+# pr-checks.yml's "Build service images from PR source" step. The matching
+# imagePullPolicy patches stop kubelet from trying to re-pull them.
+
+namespace: crypto-wallet-app
+
+resources:
+  - ../../components
+  - ci-db-secret.yaml
+
+images:
+  - name: 079000477935.dkr.ecr.us-east-1.amazonaws.com/wallet-service
+    newName: crypto-wallet-app/wallet-service
+    newTag: ci
+  - name: 079000477935.dkr.ecr.us-east-1.amazonaws.com/order-service
+    newName: crypto-wallet-app/order-service
+    newTag: ci
+  - name: 079000477935.dkr.ecr.us-east-1.amazonaws.com/frontend
+    newName: crypto-wallet-app/frontend
+    newTag: ci
+
+patches:
+  # imagePullPolicy -> IfNotPresent (see the `images:` comment above), and
+  # CPU *requests* trimmed to a token amount — a GitHub-hosted runner's
+  # Kind node has little CPU to spare once ingress-nginx and Kafka are
+  # also scheduled (confirmed live: the committed requests alone made
+  # wallet-service unschedulable, "Insufficient cpu"). Limits are
+  # untouched, so each container can still burst up under the k6 run.
+  - target:
+      kind: Deployment
+      name: wallet-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 20m
+  - target:
+      kind: Deployment
+      name: order-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 20m
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 20m
+  - target:
+      kind: Deployment
+      name: postgres-db
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 20m
+  - target:
+      kind: ClusterSecretStore
+      name: vault-crypto-app
+    patch: |-
+      apiVersion: external-secrets.io/v1beta1
+      kind: ClusterSecretStore
+      metadata:
+        name: vault-crypto-app
+      $patch: delete
+  - target:
+      kind: ExternalSecret
+      name: crypto-db-external-secret
+    patch: |-
+      apiVersion: external-secrets.io/v1beta1
+      kind: ExternalSecret
+      metadata:
+        name: crypto-db-external-secret
+        namespace: crypto-wallet-app
+      $patch: delete
+  - target:
+      kind: PersistentVolumeClaim
+      name: postgres-data
+    patch: |-
+      - op: replace
+        path: /spec/storageClassName
+        value: standard

@@ -13,9 +13,12 @@ Pull Request.
    validated it (test output, `kubectl` checks, etc.) in the PR body.
 3. [PR Checks](.github/workflows/pr-checks.yml) runs automatically on open/
    update: YAML lint (files the PR touches), `kustomize build` across every
-   `kustomization.yaml`, a client-side `kubectl apply --dry-run` of every
-   rendered manifest, and `helm template` of every ArgoCD Application's
-   chart + committed values. All must pass before merging.
+   `kustomization.yaml`, offline `kubeconform` schema validation of every
+   rendered manifest, `helm template` of every ArgoCD Application's chart +
+   committed values, and a `k6-performance-sanity` job that deploys the PR's
+   own service images to a throwaway Kind cluster and runs
+   `tests/performance/load-test.js` through it. All must pass before
+   merging.
 4. `main`'s only writer besides a merged PR is
    [ci.yml](.github/workflows/ci.yml)'s `update-manifests` job, which pins
    Deployment image tags after a build — that's an automated, narrowly

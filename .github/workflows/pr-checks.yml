@@ -259,6 +259,7 @@ jobs:
       - name: Dump cluster state on failure
         if: failure()
         run: |
+          kubectl describe nodes
           kubectl get pods -A
           kubectl describe pods -n crypto-wallet-app
           kubectl logs -n crypto-wallet-app -l app=wallet-service --tail=200 || true

@@ -4,6 +4,13 @@
 # single combined KRaft controller+broker node — except persistence is
 # disabled: Kind has no `gp3` (EBS) StorageClass, and this cluster is
 # destroyed at the end of the job anyway.
+#
+# controller.resources overrides the chart's default resourcesPreset
+# ("small" = 500m CPU request) explicitly: a GitHub-hosted runner's Kind
+# node has no CPU to spare for that on top of ingress-nginx + the app
+# itself — confirmed live, a 500m Kafka request alone left wallet-service
+# unschedulable ("Insufficient cpu"). 200m is plenty for a single-partition
+# smoke topic.
 image:
   repository: bitnamilegacy/kafka
 
@@ -19,6 +26,13 @@ controller:
   replicaCount: 1
   persistence:
     enabled: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
   overrideConfiguration:
     offsets.topic.replication.factor: "1"
     transaction.state.log.replication.factor: "1"

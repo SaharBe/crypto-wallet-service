@@ -8,12 +8,15 @@
 // point of view instead: for each order, how long until wallet-service's
 // consumer has applied it and GET /balance/:userId reflects it.
 //
-// Run: BASE_URL=http://localhost:8080 k6 run kafka-pipeline-stress.js
+// Run (default BASE_URL is the ingress-nginx port-forward, already set):
+//   k6 run kafka-pipeline-stress.js
 // Tune rate: k6 run -e ORDERS_PER_SEC=100 kafka-pipeline-stress.js
+// All requests send Host: wallet.local so ingress-nginx routes them to the
+// wallet Ingress — see helpers.js. Override with BASE_URL / HOST_HEADER.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Trend, Counter } from 'k6/metrics';
-import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction } from './helpers.js';
+import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction, withHost } from './helpers.js';
 
 const ordersPerSecond = parseInt(__ENV.ORDERS_PER_SEC || '50', 10);
 
@@ -56,7 +59,7 @@ export default function () {
 
   const submittedAt = Date.now();
   const res = http.post(`${BASE_URL}/api/order/orders`, payload, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: withHost({ 'Content-Type': 'application/json' }),
     tags: { name: 'submit_order' },
   });
 
@@ -70,6 +73,7 @@ export default function () {
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS && !processed; attempt++) {
     sleep(POLL_INTERVAL_S);
     const pollRes = http.get(`${BASE_URL}/api/wallet/balance/${userId}`, {
+      headers: withHost(),
       tags: { name: 'poll_balance_for_lag' },
     });
     if (pollRes.status === 200) {

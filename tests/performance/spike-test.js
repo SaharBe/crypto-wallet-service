@@ -6,10 +6,13 @@
 // failures in Grafana alongside the k6 output (see Makefile `test-load`
 // target for how to observe them live).
 //
-// Run: BASE_URL=http://localhost:8080 k6 run spike-test.js
+// Run (default BASE_URL is the ingress-nginx port-forward, already set):
+//   k6 run spike-test.js
+// All requests send Host: wallet.local so ingress-nginx routes them to the
+// wallet Ingress — see helpers.js. Override with BASE_URL / HOST_HEADER.
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
-import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction } from './helpers.js';
+import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction, withHost } from './helpers.js';
 
 export const options = {
   scenarios: {
@@ -35,6 +38,7 @@ export default function () {
 
   group('get_balance', () => {
     const res = http.get(`${BASE_URL}/api/wallet/balance/${userId}`, {
+      headers: withHost(),
       tags: { name: 'get_balance' },
     });
     check(res, { 'get_balance status is 200': (r) => r.status === 200 });
@@ -48,7 +52,7 @@ export default function () {
       action: randomAction(),
     });
     const res = http.post(`${BASE_URL}/api/order/orders`, payload, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: withHost({ 'Content-Type': 'application/json' }),
       tags: { name: 'place_order' },
     });
     check(res, { 'place_order status is 202': (r) => r.status === 202 });

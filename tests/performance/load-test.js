@@ -13,12 +13,15 @@
 //                                           applied it, standing in for
 //                                           "poll order status"
 //
-// Run: BASE_URL=http://localhost:8080 k6 run load-test.js
+// Run (default BASE_URL is the ingress-nginx port-forward, already set):
+//   k6 run load-test.js
 // (see ../../Makefile's `test-load` target, or run-in-cluster.sh)
+// All requests send Host: wallet.local so ingress-nginx routes them to the
+// wallet Ingress — see helpers.js. Override with BASE_URL / HOST_HEADER.
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend } from 'k6/metrics';
-import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction, randomSleep } from './helpers.js';
+import { BASE_URL, randomUserId, randomCoin, randomAmount, randomAction, randomSleep, withHost } from './helpers.js';
 
 const orderProcessingLag = new Trend('order_processing_lag', true);
 
@@ -51,6 +54,7 @@ export default function () {
 
   group('get_balance', () => {
     const res = http.get(`${BASE_URL}/api/wallet/balance/${userId}`, {
+      headers: withHost(),
       tags: { name: 'get_balance' },
     });
     check(res, { 'get_balance status is 200': (r) => r.status === 200 });
@@ -70,7 +74,7 @@ export default function () {
       action: randomAction(),
     });
     const res = http.post(`${BASE_URL}/api/order/orders`, payload, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: withHost({ 'Content-Type': 'application/json' }),
       tags: { name: 'place_order' },
     });
     orderAccepted = check(res, { 'place_order status is 202': (r) => r.status === 202 });
@@ -89,6 +93,7 @@ export default function () {
     for (let attempt = 0; attempt < maxAttempts && !processed; attempt++) {
       sleep(1);
       const res = http.get(`${BASE_URL}/api/wallet/balance/${userId}`, {
+        headers: withHost(),
         tags: { name: 'poll_order_status' },
       });
       check(res, { 'poll_order_status status is 200': (r) => r.status === 200 });

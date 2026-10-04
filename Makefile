@@ -18,14 +18,23 @@ SERVICES     := order-service wallet-service frontend
 SECRETS_ENV  := secrets.env
 
 # k6 performance tests — see tests/performance/. K6_SCRIPT picks which one;
-# K6_MODE=local runs against BASE_URL (default: a port-forwarded frontend
-# Service) via a local k6 binary or, if missing, the grafana/k6 Docker
-# image; K6_MODE=cluster runs it in-cluster as an ephemeral Pod instead
-# (tests/performance/run-in-cluster.sh), hitting the frontend Service
-# directly with no port-forward involved.
+# K6_MODE=local runs against BASE_URL (default: the ingress-nginx
+# port-forward started by `make ingress-forward`) via a local k6 binary or,
+# if missing, the grafana/k6 Docker image; K6_MODE=cluster runs it in-cluster
+# as an ephemeral Pod instead (tests/performance/run-in-cluster.sh), hitting
+# the frontend Service directly with no port-forward involved.
+#
+# The k6 scripts send an explicit `Host: wallet.local` header by default
+# (see tests/performance/helpers.js) so ingress-nginx routes BASE_URL's
+# requests to the wallet Ingress. HOST_HEADER overrides it (HOST_HEADER=''
+# sends none) — left unset here (no `?=`) so that default only kicks in
+# when the caller doesn't pass one, rather than forwarding an empty value
+# that would disable it.
 K6_SCRIPT ?= load-test.js
 K6_MODE   ?= local
 BASE_URL  ?= http://localhost:8080
+HOST_HEADER_ENV := $(if $(filter undefined,$(origin HOST_HEADER)),,HOST_HEADER="$(HOST_HEADER)")
+HOST_HEADER_ARG := $(if $(filter undefined,$(origin HOST_HEADER)),,-e HOST_HEADER="$(HOST_HEADER)")
 
 # Source secrets.env into the recipe shell when present; no-op when absent
 # (targets that need a specific variable assert on it explicitly — see build).
@@ -117,16 +126,17 @@ build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 		fi; \
 	done
 
-test-load: ## Run k6 load tests. K6_SCRIPT=load-test.js|spike-test.js|kafka-pipeline-stress.js (default load-test.js), K6_MODE=local|cluster (default local), BASE_URL=... (local mode only; default http://localhost:8080 — run `kubectl port-forward svc/frontend 8080:80 -n crypto-wallet-app` first)
+test-load: ## Run k6 load tests. K6_SCRIPT=load-test.js|spike-test.js|kafka-pipeline-stress.js (default load-test.js), K6_MODE=local|cluster (default local), BASE_URL=... (local mode only; default http://localhost:8080 — run `make ingress-forward` first), HOST_HEADER=... (default wallet.local; '' to send none)
 	@if [ "$(K6_MODE)" = "cluster" ]; then \
 		./tests/performance/run-in-cluster.sh "$(K6_SCRIPT)"; \
 	elif command -v k6 >/dev/null 2>&1; then \
 		echo "🚀 Running $(K6_SCRIPT) locally against $(BASE_URL)..."; \
-		BASE_URL="$(BASE_URL)" k6 run "tests/performance/$(K6_SCRIPT)"; \
+		$(HOST_HEADER_ENV) BASE_URL="$(BASE_URL)" k6 run "tests/performance/$(K6_SCRIPT)"; \
 	else \
 		echo "🐳 k6 not found locally — running $(K6_SCRIPT) via the grafana/k6 Docker image against $(BASE_URL)..."; \
 		docker run --rm -i --network host \
 			-e BASE_URL="$(BASE_URL)" \
+			$(HOST_HEADER_ARG) \
 			-v "$$(pwd)/tests/performance:/scripts" \
 			grafana/k6:latest run "/scripts/$(K6_SCRIPT)"; \
 	fi

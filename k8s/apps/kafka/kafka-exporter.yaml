@@ -1,0 +1,75 @@
+# danielqsj/kafka-exporter, not the bitnami/kafka chart's own metrics.jmx
+# toggle: that JMX exporter only re-exposes Kafka's internal JMX beans
+# (kafka_server_*, kafka_network_*, ...), it has no concept of consumer
+# group offsets at all. kafka_consumergroup_lag and
+# kafka_topic_partition_current_offset — what this task needs in
+# Prometheus — are metric names this standalone exporter computes itself
+# by querying the broker's consumer-group/offset APIs directly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-exporter
+  namespace: kafka
+  labels:
+    app: kafka-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  template:
+    metadata:
+      labels:
+        app: kafka-exporter
+    spec:
+      containers:
+        - name: kafka-exporter
+          image: danielqsj/kafka-exporter:v1.10.0
+          imagePullPolicy: IfNotPresent
+          args:
+            # Same stable Service DNS as every other in-cluster Kafka
+            # client (see k8s/components/wallet-service.yaml) rather than
+            # the kafka-controller-0 pod FQDN, so a controller restart
+            # doesn't take this exporter down with it.
+            - --kafka.server=kafka.kafka.svc.cluster.local:9092
+          ports:
+            - name: metrics
+              containerPort: 9308
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+            limits:
+              memory: "128Mi"
+              cpu: "150m"
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9308
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 9308
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-exporter
+  namespace: kafka
+  labels:
+    app: kafka-exporter
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9308
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app: kafka-exporter

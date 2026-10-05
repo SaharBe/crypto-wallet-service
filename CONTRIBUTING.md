@@ -10,7 +10,11 @@ Pull Request.
    for a bug/regression (e.g. `feat/plat-406-hpa-tuning`).
 2. Commit your changes on that branch, push it to `origin`, and open a PR
    against `main` with `gh pr create` — summarize what changed and how you
-   validated it (test output, `kubectl` checks, etc.) in the PR body.
+   validated it (test output, `kubectl` checks, etc.) in the PR body. This
+   applies equally to AI/dev automation tooling (e.g. Claude Code): agents
+   must branch, commit, push, and open a PR via `gh pr create` with a clear
+   description and validation summary — never commit or push to `main`
+   directly, automated or not.
 3. [PR Checks](.github/workflows/pr-checks.yml) runs automatically on open/
    update: YAML lint (files the PR touches), `kustomize build` across every
    `kustomization.yaml`, offline `kubeconform` schema validation of every

@@ -24,6 +24,7 @@ team would do it.
 - [Operations & Makefile Commands](#operations--makefile-commands)
 - [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
+- [Development & Contributing Workflow](#development--contributing-workflow)
 
 ## Architecture
 
@@ -246,3 +247,12 @@ every HPA scales toward `maxReplicas` at once during a sustained test,
 expect some pods to land `Pending` rather than CPU-throttled — that's a
 cluster-sizing characteristic worth knowing going in, not a bug in the
 autoscaling config.
+
+## Development & Contributing Workflow
+
+No direct pushes to `main` — every change (manifests, Terraform, services,
+docs) goes through a `feat/<task-name>` or `fix/<task-name>` branch and a
+Pull Request opened with `gh pr create`, including changes made by AI/dev
+automation tooling. [PR Checks](.github/workflows/pr-checks.yml) must pass
+before merging, and any live-cluster testing follows the ArgoCD `selfHeal`
+pause/restore protocol. Full details in [CONTRIBUTING.md](CONTRIBUTING.md).

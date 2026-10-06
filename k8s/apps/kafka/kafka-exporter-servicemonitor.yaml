@@ -1,0 +1,27 @@
+# `release: monitoring-stack` is required, not cosmetic: the
+# kube-prometheus-stack Application (k8s/apps/monitoring-app.yaml) leaves
+# serviceMonitorSelectorNilUsesHelmValues at its chart default, so the
+# Prometheus CR it renders only watches ServiceMonitors carrying this exact
+# label (confirmed live: `kubectl get prometheus -n monitoring
+# monitoring-stack-kube-prom-prometheus -o jsonpath='{.spec.serviceMonitorSelector}'`
+# -> {"matchLabels":{"release":"monitoring-stack"}}). Its
+# serviceMonitorNamespaceSelector is {} (all namespaces), so this can live
+# next to the exporter in `kafka` rather than in `monitoring`.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-exporter
+  namespace: kafka
+  labels:
+    release: monitoring-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - kafka
+  selector:
+    matchLabels:
+      app: kafka-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

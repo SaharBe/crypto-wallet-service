@@ -1,6 +1,7 @@
 # The Applications that live in THIS repo (crypto-wallet-app,
-# monitoring-custom) used to be near-identical Application manifests, each
-# repeating repoURL. They're collapsed here into one ApplicationSet so the
+# monitoring-custom, kafka-exporter) used to be near-identical Application
+# manifests, each repeating repoURL. They're collapsed here into one
+# ApplicationSet so the
 # repository URL is declared exactly once (in the template's
 # `source.repoURL`); a list-generator element then only varies the bits that
 # actually differ per app — its name, the path it syncs, and the destination
@@ -45,6 +46,9 @@ spec:
           - name: monitoring-custom
             path: k8s/apps/monitoring
             namespace: monitoring
+          - name: kafka-exporter
+            path: k8s/apps/kafka
+            namespace: kafka
   template:
     metadata:
       name: '{{ .name }}'

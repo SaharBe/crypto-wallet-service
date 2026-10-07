@@ -19,6 +19,21 @@ fi
 CM_NAME="k6-scripts"
 POD_NAME="k6-$(basename "$SCRIPT" .js)-$(date +%s)"
 
+# Stream metrics into Prometheus's remote-write receiver (enabled in
+# k8s/apps/monitoring-app.yaml) so the run shows up live on the
+# "Crypto Wallet - Performance & Load" Grafana dashboard, tagged
+# testid=<pod name> for that dashboard's test-id picker. Set
+# K6_PROMETHEUS_RW_SERVER_URL='' to skip pushing (summary-only, as before).
+PROM_RW_URL="${K6_PROMETHEUS_RW_SERVER_URL-http://monitoring-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/write}"
+K6_ARGS='"run", "--quiet"'
+K6_ENV='{"name": "BASE_URL", "value": "'"$BASE_URL"'"}'
+if [ -n "$PROM_RW_URL" ]; then
+  K6_ARGS+=', "-o", "experimental-prometheus-rw", "--tag", "testid='"$POD_NAME"'"'
+  K6_ENV+=', {"name": "K6_PROMETHEUS_RW_SERVER_URL", "value": "'"$PROM_RW_URL"'"}'
+  K6_ENV+=', {"name": "K6_PROMETHEUS_RW_TREND_STATS", "value": "p(95),p(99),avg,max"}'
+  echo "📈 Pushing metrics to $PROM_RW_URL (testid=$POD_NAME)"
+fi
+
 from_file_args=()
 for f in "$DIR"/*.js; do
   from_file_args+=(--from-file="$f")
@@ -47,8 +62,8 @@ kubectl run "$POD_NAME" \
     "containers": [{
       "name": "k6",
       "image": "grafana/k6:latest",
-      "args": ["run", "--quiet", "/scripts/$SCRIPT"],
-      "env": [{"name": "BASE_URL", "value": "$BASE_URL"}],
+      "args": [$K6_ARGS, "/scripts/$SCRIPT"],
+      "env": [$K6_ENV],
       "volumeMounts": [{"name": "scripts", "mountPath": "/scripts"}],
       "resources": {
         "requests": {"cpu": "250m", "memory": "256Mi"},

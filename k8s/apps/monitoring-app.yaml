@@ -39,6 +39,14 @@ spec:
             type: ClusterIP
         prometheus:
           prometheusSpec:
+            # Lets k6 push its metrics (k6_vus, k6_http_req_duration_*,
+            # k6_http_req_failed_rate, ...) to /api/v1/write via its
+            # experimental-prometheus-rw output — k6 runs are short-lived
+            # and expose nothing to scrape. tests/performance/run-in-cluster.sh
+            # pushes here; feeds the crypto-wallet-performance dashboard
+            # (k8s/apps/monitoring/). ClusterIP-only Service, so in-cluster
+            # (or port-forwarded) writers only.
+            enableRemoteWriteReceiver: true
             retention: 2d
             resources:
               requests:

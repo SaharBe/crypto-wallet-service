@@ -61,40 +61,54 @@ kubectl port-forward svc/monitoring-stack-grafana 3000:80 -n monitoring
 # Vault by External Secrets.
 ```
 
-What to look at, and where to find it (all via the built-in
-**Kubernetes / Compute Resources / Namespace (Pods)** dashboard, or build
-ad-hoc panels from these PromQL queries in Explore):
+Then open **Dashboards -> Crypto Wallet - Performance & Load**
+(`/d/crypto-wallet-performance`). It's provisioned from git
+(`k8s/apps/monitoring/dashboards/crypto-wallet-performance.json`, synced by
+the `monitoring-custom` ArgoCD Application and loaded by Grafana's dashboard
+sidecar), and puts everything a load test moves on one screen:
 
-- **CPU / Memory scaling** — per-pod usage vs. the 100m/128Mi requests and
-  200m/256Mi limits set on `order-service` and `wallet-service`
-  (`k8s/components/order-service.yaml`, `wallet-service.yaml`):
-  ```promql
-  sum(rate(container_cpu_usage_seconds_total{namespace="crypto-wallet-app"}[1m])) by (pod)
-  sum(container_memory_working_set_bytes{namespace="crypto-wallet-app"}[1m]) by (pod)
-  ```
-  There's no HorizontalPodAutoscaler configured on these Deployments yet —
-  `order-service` is fixed at 2 replicas, `wallet-service` at 1 — so under
-  load you'll see pods hit their CPU/memory limits (and get OOMKilled or
-  throttled) rather than the ReplicaSet scaling out. That's useful signal
-  in its own right: it tells you where an HPA would need to kick in.
-  Watch restarts directly:
+| Row | Panels | Source |
+|---|---|---|
+| k6 load test | Active VUs, request rate, `http_req_duration` p95/p99/avg per endpoint (200ms SLO line), `http_req_failed` rate (1% SLO line), `order_processing_lag` | k6 -> Prometheus remote write |
+| Autoscaling & pods | `wallet-service` available pods, HPA current/desired/max replicas, HPA CPU utilization vs 70% target, ready pods per Deployment | kube-state-metrics |
+| Kafka | `kafka_consumergroup_lag` (total + per topic), produce vs consume rate | kafka-exporter (`k8s/apps/kafka/`) |
+| Resource utilization | CPU per pod, CPU % of request (what the HPA scales on), memory working set, memory % of limit, CPU throttling | cAdvisor + kube-state-metrics |
+
+Variables at the top pick the namespace (default `crypto-wallet-app`), the
+Kafka consumer group (default `wallet-group`) and the **k6 test id**.
+
+### Getting k6 metrics into Prometheus
+
+k6 runs are short-lived and expose nothing for Prometheus to scrape, so
+they push instead: Prometheus has its remote-write receiver enabled
+(`enableRemoteWriteReceiver` in `k8s/apps/monitoring-app.yaml`) and k6's
+`experimental-prometheus-rw` output writes to it.
+
+- **`K6_MODE=cluster`** does this automatically — `run-in-cluster.sh`
+  pushes to `monitoring-stack-kube-prom-prometheus.monitoring.svc` and tags
+  the run `testid=<pod name>`, which then shows up in the dashboard's test
+  id picker. `K6_PROMETHEUS_RW_SERVER_URL='' make test-load K6_MODE=cluster`
+  turns it off.
+- **Local runs** don't push by default (the CI Kind job has no Prometheus
+  to push to). To push one by hand:
   ```bash
-  kubectl get pods -n crypto-wallet-app -w
+  kubectl port-forward svc/monitoring-stack-kube-prom-prometheus 9090:9090 -n monitoring &
+  K6_PROMETHEUS_RW_SERVER_URL=http://localhost:9090/api/v1/write \
+  K6_PROMETHEUS_RW_TREND_STATS='p(95),p(99),avg,max' \
+  BASE_URL=http://localhost:8080 \
+    k6 run -o experimental-prometheus-rw --tag testid=local-$(date +%s) tests/performance/load-test.js
   ```
 
-- **HTTP latency** — kube-prometheus-stack scrapes node/cAdvisor and
-  kube-state-metrics by default, but neither `order-service` nor
-  `wallet-service` currently exposes a `/metrics` endpoint, so
-  request-duration percentiles aren't in Prometheus. Treat k6's own
-  `http_req_duration` output (printed at the end of the run, or streamed
-  with `k6 run --out ...`) as the source of truth for the p95 SLO.
+`K6_PROMETHEUS_RW_TREND_STATS` matters: Trend metrics are only sent as the
+stats listed there, as `k6_<metric>_p95` / `_p99` / `_avg` / `_max` (in
+seconds), which is what the dashboard queries. It defaults to `p(99)`
+only, so without it the p95/avg panels stay empty.
 
-- **Kafka lag** — the Kafka chart (`k8s/apps/kafka-app.yaml`) has its
-  metrics exporter disabled, so there's no `kafka_consumergroup_lag`
-  series in Prometheus either. `load-test.js` and
-  `kafka-pipeline-stress.js` measure the same thing from the application
-  side instead — `order_processing_lag`, printed in the k6 summary — by
-  timing how long after a `POST /orders` the balance the consumer writes
-  actually shows up. If you want the real Kafka-side metric later, that
-  means turning on `metrics.kafka.enabled` (and a
-  ServiceMonitor) in `k8s/apps/kafka-app.yaml`.
+k6's own end-of-run summary remains the pass/fail source of truth for the
+thresholds; the dashboard is for seeing *why* — which endpoint degraded,
+whether the HPA had scaled out yet, whether Kafka lag was building, which
+pod hit its CPU limit. Watch restarts directly with:
+
+```bash
+kubectl get pods -n crypto-wallet-app -w
+```

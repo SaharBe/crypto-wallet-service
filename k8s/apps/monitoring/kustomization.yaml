@@ -5,3 +5,23 @@ namespace: monitoring
 
 resources:
   - dashboards/eks-core-health.yaml
+
+# Unified k6 / HPA / Kafka-lag / pod-resources view for load tests against
+# crypto-wallet-app (layout modelled on the official k6 Prometheus
+# dashboard, grafana.com ID 18030). Kept as a plain .json file rather than
+# inlined into a ConfigMap like eks-core-health.yaml: its PromQL lines run
+# well past yamllint's 120-char limit and JSON strings can't be wrapped,
+# and a Grafana UI export (Share -> Export -> Save to file) can be dropped
+# straight over it. Picked up the same way, by kube-prometheus-stack's
+# grafana-sc-dashboard sidecar watching for the grafana_dashboard label —
+# hence the fixed name/label below instead of kustomize's default hash
+# suffix. k6 series only exist when a run pushes them through Prometheus's
+# remote-write receiver; see tests/performance/README.md.
+configMapGenerator:
+  - name: crypto-wallet-performance-dashboard
+    files:
+      - dashboards/crypto-wallet-performance.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"

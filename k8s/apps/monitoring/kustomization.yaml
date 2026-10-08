@@ -3,21 +3,33 @@ kind: Kustomization
 
 namespace: monitoring
 
-resources:
-  - dashboards/eks-core-health.yaml
-
-# Unified k6 / HPA / Kafka-lag / pod-resources view for load tests against
-# crypto-wallet-app (layout modelled on the official k6 Prometheus
-# dashboard, grafana.com ID 18030). Kept as a plain .json file rather than
-# inlined into a ConfigMap like eks-core-health.yaml: its PromQL lines run
-# well past yamllint's 120-char limit and JSON strings can't be wrapped,
-# and a Grafana UI export (Share -> Export -> Save to file) can be dropped
-# straight over it. Picked up the same way, by kube-prometheus-stack's
-# grafana-sc-dashboard sidecar watching for the grafana_dashboard label —
-# hence the fixed name/label below instead of kustomize's default hash
-# suffix. k6 series only exist when a run pushes them through Prometheus's
-# remote-write receiver; see tests/performance/README.md.
+# Grafana dashboards, one plain .json file each under dashboards/, turned
+# into ConfigMaps here. kube-prometheus-stack's grafana-sc-dashboard sidecar
+# watches the monitoring namespace for the grafana_dashboard: "1" label and
+# loads them live, no Grafana restart needed — hence the fixed name/label
+# below instead of kustomize's default hash suffix. The file name becomes
+# the ConfigMap's data key.
+#
+# Plain .json rather than JSON inlined into a hand-written ConfigMap:
+# PromQL lines routinely run past yamllint's 120-char limit and JSON
+# strings can't be wrapped, and a Grafana UI export (Share -> Export ->
+# Save to file) can be dropped straight over the file. To add a dashboard,
+# add a .json under dashboards/ and a matching entry below.
 configMapGenerator:
+  # Cluster-level health: node CPU/memory, nodes Ready, pod restarts,
+  # non-Running pods, Kyverno admissions/blocks.
+  - name: eks-core-health-dashboard
+    files:
+      - dashboards/eks-core-health.json
+    options:
+      disableNameSuffixHash: true
+      labels:
+        grafana_dashboard: "1"
+  # k6 / HPA / Kafka-lag / pod-resources view for load tests against
+  # crypto-wallet-app (layout modelled on the official k6 Prometheus
+  # dashboard, grafana.com ID 18030). k6 series only exist when a run
+  # pushes them through Prometheus's remote-write receiver; see
+  # tests/performance/README.md.
   - name: crypto-wallet-performance-dashboard
     files:
       - dashboards/crypto-wallet-performance.json

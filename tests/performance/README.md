@@ -10,32 +10,78 @@ app today, so "user journey" maps to what actually exists:
 | `spike-test.js` | Sudden traffic burst | 0 -> 300 VUs in 15s, hold, drop |
 | `kafka-pipeline-stress.js` | Rapid-fire `/orders` to stress the Kafka producer/consumer pipeline | Fixed 50 orders/sec (constant-arrival-rate) for 2 min, independent of VU count |
 
-All three enforce the required SLOs on the synchronous HTTP endpoints:
+Thresholds on the synchronous HTTP endpoints:
 
-- `http_req_duration`: p95 < 200ms
-- `http_req_failed`: rate < 1%
+| Script | `http_req_duration` | `http_req_failed` |
+|---|---|---|
+| `load-test.js`, `kafka-pipeline-stress.js` | p95 < 200ms (steady-state SLO) | rate < 1% |
+| `spike-test.js` | p95 < 800ms (degradation ceiling) | rate < 1% |
 
 `load-test.js` and `kafka-pipeline-stress.js` also track `order_processing_lag`
 (ms from order submission to the balance reflecting it) as a separate,
 informational Trend metric — that's Kafka's async processing time, not an
 HTTP SLO, so it's not conflated with the two thresholds above.
 
-**Note:** `spike-test.js` is *expected* to breach these thresholds — finding
-where the SLOs break under a sudden burst is the point of that test, not a
-bug in the script.
+**Why the spike test's latency limit is looser:** going from 0 to 300 VUs
+in 15s outruns HPA scale-out on this cluster, because new replicas take
+about 30–60s to become Ready. Holding the 200ms steady-state p95 through
+that is unrealistic. The spike test checks resilience instead: zero errors,
+no restarts, and latency that degrades but stays under 800ms.
 
 ## Running
 
+### In-cluster (use this for baseline numbers)
+
+`K6_MODE=cluster` runs each script as an ephemeral `grafana/k6` Pod in
+`crypto-wallet-app`. The Pod hits the `frontend` Service directly, so no
+local port-forward sits in the latency path, and it pushes metrics to
+Prometheus via remote write. `run-in-cluster.sh` deletes the Pod and its
+`k6-scripts` ConfigMap when the run ends.
+
+1. **Prerequisites:** `kubectl` points at the EKS cluster
+   (`kubectl config current-context`). The app is healthy and the HPAs are
+   at their resting replica count, so runs start from the same state:
+   ```bash
+   kubectl get pods,hpa -n crypto-wallet-app
+   ```
+2. **Optional: watch it live.** In a second terminal, port-forward Grafana
+   (see [Observing it live in Grafana](#observing-it-live-in-grafana)) and
+   open the **Crypto Wallet - Performance & Load** dashboard. In another,
+   `kubectl get hpa,pods -n crypto-wallet-app -w`.
+3. **Run the suite one script at a time** from the repo root:
+   ```bash
+   make test-load K6_MODE=cluster                                    # load-test.js            (~6 min)
+   make test-load K6_MODE=cluster K6_SCRIPT=spike-test.js            # spike-test.js           (~1.5 min)
+   make test-load K6_MODE=cluster K6_SCRIPT=kafka-pipeline-stress.js # kafka-pipeline-stress.js (~2 min)
+   ```
+   Between runs, wait for the HPAs to scale back to 1 replica each (about
+   5 min after the spike test, set by the default scale-down stabilization
+   window). Starting the next run with the cluster already scaled out
+   skews the baseline.
+4. **Read the result.** The k6 end-of-run summary is the source of truth:
+   every threshold prints `✓`/`✗`, and `make` exits non-zero (k6 exit code
+   99) if any threshold is breached. The first output line names the run's
+   `testid` (`k6-<script>-<epoch>`). Pick that `testid` in the Grafana
+   dashboard's test id picker.
+5. **Confirm cleanup:** `kubectl get pods,cm -n crypto-wallet-app | grep k6`
+   should print nothing.
+
+Compare the results with the [baselines](#baselines-in-cluster-eks) below.
+A regression is a p95 or error rate meaningfully above the baseline, even
+if it's still under the SLO.
+
+### Local (through the Ingress Controller)
+
 ```bash
-# Local: through the Ingress Controller (realistic L7 path — see root README)
 make ingress-forward &                            # port-forwards ingress-nginx to localhost:8080
 make test-load                                    # load-test.js, local k6 (or Docker if k6 isn't installed)
 make test-load K6_SCRIPT=spike-test.js
 make test-load K6_SCRIPT=kafka-pipeline-stress.js
-
-# In-cluster: ephemeral k6 Pod, no port-forward, hits the frontend Service directly
-make test-load K6_MODE=cluster K6_SCRIPT=spike-test.js
 ```
+
+Local runs go through the port-forward, which adds latency of its own.
+They're useful for checking that a script works, not for numbers to compare
+against the baselines.
 
 All three scripts send an explicit `Host: wallet.local` header (see
 `helpers.js`) so that, when BASE_URL points at the ingress-nginx
@@ -47,6 +93,64 @@ e.g. when pointing at a direct `kubectl port-forward svc/frontend` instead,
 where it's unnecessary but harmless.
 
 `kafka-pipeline-stress.js`'s rate is tunable: `k6 run -e ORDERS_PER_SEC=100 kafka-pipeline-stress.js`.
+
+## Baselines (in-cluster, EKS)
+
+Recorded 2026-10-11 with `make test-load K6_MODE=cluster`, run one after
+another, with the HPAs back at 1 replica before each run. Application
+manifests as of `main` @ `843a03a`. The spike test was re-run after its
+threshold changed to p95 < 800ms.
+
+**Environment:** EKS 1.31 on 3× `t3.medium` nodes. `frontend`,
+`order-service` and `wallet-service` each start at 1 replica (HPA min 1,
+max 3, CPU target 70%). Kafka consumer group `wallet-group`. The k6 Pod is
+limited to 1 CPU and 512Mi.
+
+### Summary
+
+| | `load-test.js` | `spike-test.js` | `kafka-pipeline-stress.js` |
+|---|---|---|---|
+| **Result** | ✅ PASS | ✅ PASS | ✅ PASS |
+| Duration | 5m40s | 1m30s | 2m |
+| VUs (peak) | 100 | 300 | 55 (of 100 allocated) |
+| HTTP requests | 16,653 | 77,018 | 12,000 |
+| Throughput | 48.6 req/s | 854.2 req/s | 99.2 req/s (49.6 orders/s, 0 dropped) |
+| Iterations | 5,551 (16.2/s) | 38,509 (427.1/s) | 6,000 (49.6/s) |
+| `http_req_duration` avg / med | 4.75ms / 4.05ms | 191.6ms / 120.08ms | 5.27ms / 4.35ms |
+| `http_req_duration` p90 | 6.63ms | 556.39ms | 7.26ms |
+| `http_req_duration` **p95** | **8.88ms** ✓ (< 200ms) | **619.06ms** ✓ (< 800ms) | **10.03ms** ✓ (< 200ms) |
+| `http_req_duration` max | 92ms | 806.03ms | 258.46ms |
+| `http_req_failed` (SLO < 1%) | **0.00%** ✓ (0 / 16,653) | **0.00%** ✓ (0 / 77,018) | **0.00%** ✓ (0 / 12,000) |
+| Checks passed | 100% | 100% | 100% |
+| `order_processing_lag` p90 / p95 (limit p95 < 5s) | 1.94s / **1.97s** ✓ | not measured | 1.01s / **1.02s** ✓ |
+| Kafka `wallet-group` consumer lag (peak) | ≤ 1 msg | 15,109 msgs, drained to 0 within ~50s of the spike ending | ≤ 1 msg |
+| HPA scaling (replicas, start → peak) | `wallet-service` 1 → 2, others stayed at 1 | all three 1 → 3 (max) within ~50s (`frontend` first, ~30s in) | `wallet-service` 1 → 3, `frontend` and `order-service` 1 → 2 |
+| Pod restarts / Pending pods | 0 / 0 | 0 / 0 | 0 / 0 |
+| Prometheus `testid` | `k6-load-test-1791714712` | `k6-spike-test-1791716871` | `k6-kafka-pipeline-stress-1791715566` |
+
+### Notes on reading these numbers
+
+- **`spike-test.js` passes with about 23% headroom (p95 619ms against 800ms).**
+  Latency climbs while 1 replica of each service takes the burst, before the
+  HPA scale-out lands. Nothing errored and nothing restarted: the system got
+  slower but didn't fail. Kafka lag built up to about 15k messages while the
+  consumer fell behind, then cleared once the spike ended. An earlier run on
+  the same day measured p95 672ms and 8.4k peak lag, so expect about ±10% on
+  p95 between runs. A p95 heading toward 800ms, any errors, any restarts, or
+  lag that doesn't drain is a regression.
+- **`order_processing_lag` has a floor set by the poll interval.** The
+  scripts poll the balance once per second (`kafka-pipeline-stress.js`) or
+  after a 0.5–1.5s think time (`load-test.js`), so the measured lag can't be
+  much below 1s even when the consumer is faster. The real pipeline latency
+  is lower than these figures. Kafka consumer-group lag in Grafana is the
+  closer measure.
+- **`kafka-pipeline-stress.js` sends 2 HTTP requests per iteration**: the
+  `POST /orders` plus at least one balance poll. That's why its request rate
+  is about double the 50 orders/s arrival rate.
+- **Cluster capacity:** the spike pushed the cluster to 53 pods, close to
+  the 17-pods-per-node VPC-CNI ceiling on these `t3.medium` nodes. Raising
+  any HPA's `maxReplicas` could leave pods `Pending` with "Too many pods"
+  during a spike.
 
 ## Observing it live in Grafana
 

@@ -1,10 +1,11 @@
-// Sudden burst of traffic — 0 -> 300 VUs in 15 seconds — to find where the
-// stack breaks and how it fails (slow, or error) rather than to pass
-// cleanly. It is normal and expected for the thresholds below to fail
-// during a spike test; a failed threshold here is the finding, not a bug
-// in the script. Watch pod restarts / OOMKills and readiness-probe
-// failures in Grafana alongside the k6 output (see Makefile `test-load`
-// target for how to observe them live).
+// Sudden burst of traffic — 0 -> 300 VUs in 15 seconds — to verify the
+// stack stays resilient (zero errors, no restarts) while the HPAs catch up,
+// not that it holds steady-state latency. The burst outruns HPA scale-out
+// (new replicas take ~30-60s to become Ready), so p95 is expected to rise
+// well above the 200ms steady-state SLO; the threshold below is a looser
+// degradation ceiling instead (see README.md's baselines). Watch pod
+// restarts / OOMKills and readiness-probe failures in Grafana alongside the
+// k6 output (see Makefile `test-load` target for how to observe them live).
 //
 // Run (default BASE_URL is the ingress-nginx port-forward, already set):
 //   k6 run spike-test.js
@@ -28,7 +29,9 @@ export const options = {
     },
   },
   thresholds: {
-    http_req_duration: ['p(95)<200'],
+    // Degradation ceiling, not the 200ms steady-state SLO — see header.
+    http_req_duration: ['p(95)<800'],
+    // Resilience SLO: the burst may slow requests down, but not fail them.
     http_req_failed: ['rate<0.01'],
   },
 };

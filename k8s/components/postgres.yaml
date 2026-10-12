@@ -33,55 +33,55 @@ spec:
         app: postgres
     spec:
       containers:
-      - name: postgres
-        image: postgres:15
-        # k8s/apps/kyverno-policies/disallow-missing-limits.yaml requires
-        # every container to declare both — this container never had to
-        # before because its only prior Pod predates that policy (admission
-        # control doesn't touch already-running Pods). The Recreate
-        # strategy above forces a real Pod recreation on every rollout now,
-        # so a future rollout without this would get rejected outright
-        # (confirmed live: `FailedCreate ... require-resource-limits ...
-        # CPU and memory limits are required for all containers`, 38
-        # minutes of Postgres downtime until this was added).
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-        env:
-        - name: POSTGRES_USER
-          value: "myuser"
-        - name: POSTGRES_PASSWORD
-          value: "mypassword"
-        - name: POSTGRES_DB
-          value: "mydb"
-        # Subdirectory, not the mount point itself: a freshly provisioned
-        # EBS volume is ext4-formatted with a `lost+found` directory already
-        # in it, which trips initdb's "directory exists but is not empty"
-        # check on first boot. This is the fix the official postgres image
-        # docs themselves recommend for exactly this case.
-        - name: PGDATA
-          value: "/var/lib/postgresql/data/pgdata"
-        ports:
-        - containerPort: 5432
-        volumeMounts:
-        # 1. Mount the initialization directory into the container
-        - name: postgres-init-volume
-          mountPath: /docker-entrypoint-initdb.d
-        # 2. Persist actual database files across Pod restarts/reschedules
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
+        - name: postgres
+          image: postgres:15
+          # k8s/apps/kyverno-policies/disallow-missing-limits.yaml requires
+          # every container to declare both — this container never had to
+          # before because its only prior Pod predates that policy (admission
+          # control doesn't touch already-running Pods). The Recreate
+          # strategy above forces a real Pod recreation on every rollout now,
+          # so a future rollout without this would get rejected outright
+          # (confirmed live: `FailedCreate ... require-resource-limits ...
+          # CPU and memory limits are required for all containers`, 38
+          # minutes of Postgres downtime until this was added).
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          env:
+            - name: POSTGRES_USER
+              value: "myuser"
+            - name: POSTGRES_PASSWORD
+              value: "mypassword"
+            - name: POSTGRES_DB
+              value: "mydb"
+            # Subdirectory, not the mount point itself: a freshly provisioned
+            # EBS volume is ext4-formatted with a `lost+found` directory already
+            # in it, which trips initdb's "directory exists but is not empty"
+            # check on first boot. This is the fix the official postgres image
+            # docs themselves recommend for exactly this case.
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            # 1. Mount the initialization directory into the container
+            - name: postgres-init-volume
+              mountPath: /docker-entrypoint-initdb.d
+            # 2. Persist actual database files across Pod restarts/reschedules
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
       volumes:
-      # 3. Define the volume using the ConfigMap you created
-      - name: postgres-init-volume
-        configMap:
-          name: postgres-init-db-script
-      - name: postgres-data
-        persistentVolumeClaim:
-          claimName: postgres-data
+        # 3. Define the volume using the ConfigMap you created
+        - name: postgres-init-volume
+          configMap:
+            name: postgres-init-db-script
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
 ---
 apiVersion: v1
 kind: Service

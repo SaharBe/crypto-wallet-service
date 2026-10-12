@@ -28,7 +28,7 @@ spec:
             cpu: "500m"
         ports:
         - containerPort: 3000
-        
+
         env:
         - name: PORT
           value: "3000"
@@ -45,7 +45,7 @@ spec:
             secretKeyRef:
               name: crypto-db-secret
               key: DB_PASSWORD
-        
+
         livenessProbe:
           httpGet:
             path: /health

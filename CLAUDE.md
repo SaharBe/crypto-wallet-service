@@ -39,8 +39,9 @@ Further reading: [README.md](README.md), [architecture.md](architecture.md),
    and every path in the ApplicationSet (`k8s/components`, `k8s/apps/monitoring`,
    `k8s/apps/kafka`).
 3. For service code, `ci.yml` builds images, pushes them to ECR, and its
-   `update-manifests` job commits the new commit-SHA image tag into
-   `k8s/components/*.yaml`. That commit is what makes ArgoCD roll pods.
+   `update-manifests` job pins the new commit-SHA image tag in
+   `k8s/components/*.yaml` through a `chore/pin-images-<sha>` PR that it opens
+   and squash-merges itself. That merge is what makes ArgoCD roll pods.
 
 **Consequence:** any live `kubectl edit/apply` that isn't committed on `main`
 is reverted by `selfHeal`. Git is the only durable way to change the cluster.
@@ -127,8 +128,9 @@ Report this to the user rather than quietly working around it.
 ### Git
 - **NEVER commit or push directly to `main`**, and never bypass branch
   protection: no `--force` to `main`, no admin merges, no `--no-verify`.
-  `ci.yml`'s `update-manifests` job is the only other writer to `main`, and
-  it's a narrow automated exception, not a precedent.
+  The "Protect main branche" ruleset enforces this for everyone, CI included:
+  `ci.yml`'s `update-manifests` job lands its image pins through a PR that it
+  merges itself. That auto-merge is a narrow automated exception, not a precedent.
 - **NEVER merge a PR yourself** unless the user explicitly asks.
 - Pushes that touch `.github/workflows/*.yml` need the `workflow` OAuth scope.
   If GitHub rejects the push, ask the user to run

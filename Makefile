@@ -41,14 +41,15 @@ HOST_HEADER_ARG := $(if $(filter undefined,$(origin HOST_HEADER)),,-e HOST_HEADE
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password
+.PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password \
+	local-up local-down local-clean local-smoke local-logs
 
 help: ## Show this help
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-8s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 up: ## Spin up the entire stack (runs ./bootstrap.sh)
 	./bootstrap.sh
@@ -140,3 +141,28 @@ test-load: ## Run k6 load tests. K6_SCRIPT=load-test.js|spike-test.js|kafka-pipe
 			-v "$$(pwd)/tests/performance:/scripts" \
 			grafana/k6:latest run "/scripts/$(K6_SCRIPT)"; \
 	fi
+
+# ── Local docker compose stack (no AWS / Kubernetes) — see docker-compose.yml ──
+# Generated once from .env.example with a random local DB password; a file
+# target so every local-* target (including down) has the vars compose requires.
+.env:
+	@cp .env.example .env
+	@pw=$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24); \
+		sed -i.bak "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$pw/" .env && rm -f .env.bak
+	@echo "🔐 Created .env from .env.example with a random local POSTGRES_PASSWORD"
+
+local-up: .env ## Start the full stack locally (Postgres, ZooKeeper, Kafka, services, frontend); creates .env if missing
+	docker compose up -d --build --wait
+	@. ./.env; echo "✅ Up — frontend: http://localhost:$${FRONTEND_HOST_PORT:-8088}  (run 'make local-smoke' to verify end to end)"
+
+local-smoke: ## End-to-end check of the local stack: order -> Kafka -> wallet consumer -> Postgres -> balance API
+	./local-dev/smoke-test.sh
+
+local-logs: .env ## Follow logs of the local stack (SVC=wallet-service to narrow)
+	docker compose logs -f $(SVC)
+
+local-down: .env ## Stop the local stack (keeps data volumes)
+	docker compose down
+
+local-clean: .env ## Stop the local stack AND delete its volumes (Postgres/Kafka data; re-runs the init SQL next time)
+	docker compose down -v

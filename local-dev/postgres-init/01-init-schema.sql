@@ -1,0 +1,11 @@
+-- Local copy of k8s/components/postgres-init-configmap.yaml (init-schema.sql).
+-- Keep the two in sync: `make local-smoke` fails if they drift.
+-- Create wallets table if it does not exist
+CREATE TABLE IF NOT EXISTS wallets (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(255) NOT NULL,
+    currency VARCHAR(50) NOT NULL,
+    balance NUMERIC(18, 8) NOT NULL DEFAULT 0.0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, currency)
+);

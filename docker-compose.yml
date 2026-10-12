@@ -1,27 +1,219 @@
-services:
-  postgres-db:
-    image: postgres:15
-    container_name: portfolio-db-compose
-    environment:
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
-      POSTGRES_DB: mydb
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+# Local development stack: the same services, ports, env contracts and Kafka
+# topic as the EKS deployment (k8s/components/, k8s/apps/kafka-app.yaml), with
+# no AWS, Vault or Kubernetes dependency.
+#
+#   make local-up      # creates .env (random DB password) if missing, then up --build
+#   make local-smoke   # end-to-end check: frontend -> order-service -> Kafka -> wallet-service -> Postgres
+#   make local-down    # stop; `make local-clean` also drops the data volumes
+#
+# Credentials come from .env (gitignored, generated from .env.example), never
+# from this file. See "Local development" in README.md.
+#
+# Host ports are bound to 127.0.0.1 only and are overridable from .env, since
+# 8080 is usually already taken by `make ingress-forward`.
 
-  web-app:
-    image: saharbe/portfolio-app-node:v1
-    container_name: my-node-app-compose
-    ports:
-      - "3000:3000"
+name: crypto-wallet
+
+x-node-service-limits: &node-service-limits
+  # Mirrors the k8s Deployments' resources.limits (500m / 384Mi), so
+  # memory/CPU-related behaviour locally is close to what Kyverno-enforced
+  # pods get in the cluster.
+  resources:
+    limits:
+      cpus: "0.5"
+      memory: 384M
+
+services:
+  postgres:
+    image: postgres:15
     environment:
-      - DB_HOST=postgres-db
-      - DB_USER=myuser
-      - DB_PASSWORD=mypassword
-      - DB_NAME=mydb
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env (see .env.example)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-mydb}
+      # Same subdirectory layout as k8s/components/postgres.yaml.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs only on first boot of an empty volume (`make local-clean` to re-run).
+      - ./local-dev/postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    networks: [wallet-net]
+    restart: unless-stopped
+
+  # Production runs Bitnami Kafka in KRaft mode (no ZooKeeper). Locally we use
+  # Confluent's ZooKeeper-based images (7.x still supports ZooKeeper): the
+  # broker-facing contract the services see (PLAINTEXT on :9092, topic
+  # crypto-orders, group wallet-group) is identical either way.
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.7.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx256m"
+    volumes:
+      # Persisted together with kafka-data: a broker volume that outlives a
+      # wiped ZooKeeper fails to start with InconsistentClusterIdException.
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "cub", "zk-ready", "localhost:2181", "5"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks: [wallet-net]
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
     depends_on:
-      - postgres-db 
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # INTERNAL (kafka:9092) is what the containers use; same port as the
+      # in-cluster Service (kafka.kafka.svc.cluster.local:9092).
+      # EXTERNAL is for tools on the host (kcat, a service run via `node`).
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_HOST_PORT:-29092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Single broker: same overrides as kafka-app.yaml's overrideConfiguration.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "127.0.0.1:${KAFKA_HOST_PORT:-29092}:29092"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 15s
+    networks: [wallet-net]
+    restart: unless-stopped
+
+  # One-shot: create crypto-orders up front with the same shape wallet-service's
+  # consumer.js would create it (3 partitions, RF 1). Otherwise an order sent
+  # before the consumer finishes its setup would auto-create a 1-partition topic.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - kafka-topics
+      - --bootstrap-server
+      - kafka:9092
+      - --create
+      - --if-not-exists
+      - --topic
+      - crypto-orders
+      - --partitions
+      - "3"
+      - --replication-factor
+      - "1"
+    networks: [wallet-net]
+    restart: "no"
+
+  wallet-service:
+    build: ./services/wallet-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "3000"
+      KAFKA_BROKERS: kafka:9092
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-mydb}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${WALLET_HOST_PORT:-3001}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy: *node-service-limits
+    networks: [wallet-net]
+    restart: unless-stopped
+
+  order-service:
+    build: ./services/order-service
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "3000"
+      KAFKA_BROKERS: kafka:9092
+      # No DB_* here: the k8s Deployment injects DB_USER/DB_PASSWORD, but
+      # index.js never reads them (order-service only produces to Kafka).
+    ports:
+      - "127.0.0.1:${ORDER_HOST_PORT:-3002}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy: *node-service-limits
+    networks: [wallet-net]
+    restart: unless-stopped
+
+  frontend:
+    build: ./services/frontend
+    depends_on:
+      wallet-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    environment:
+      # Compose service names; nginx resolves them via Docker's embedded DNS
+      # (127.0.0.11, picked up by the image's 15-local-resolvers.envsh).
+      WALLET_SERVICE_HOST: wallet-service
+      ORDER_SERVICE_HOST: order-service
+      BACKEND_PORT: "3000"
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-8088}:8080"
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget tries ::1 first, and the
+      # nginx template only does `listen 8080` (IPv4).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 128M
+    networks: [wallet-net]
+    restart: unless-stopped
+
+networks:
+  wallet-net:
+    driver: bridge
+
 volumes:
-  pgdata: 
+  postgres-data:
+  zookeeper-data:
+  zookeeper-log:
+  kafka-data:

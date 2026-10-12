@@ -12,3 +12,6 @@ secrets.env
 # Stray Terraform state (real state now lives under terraform/*/ + remote backend)
 /terraform.tfstate
 /terraform.tfstate.backup
+
+# Local docker compose settings (generated from .env.example by `make local-up`)
+.env

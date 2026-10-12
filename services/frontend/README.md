@@ -38,6 +38,9 @@ Container listens on **8080**; the k8s Service exposes **80 → 8080**.
 
 ## Run locally
 
+Easiest: `make local-up` from the repo root runs it together with both backends,
+Kafka and Postgres (see "Local Development" in the root README). Standalone:
+
 ```bash
 docker build -t frontend ./services/frontend
 docker run --rm -p 8080:8080 \

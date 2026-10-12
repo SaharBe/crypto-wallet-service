@@ -21,6 +21,7 @@ team would do it.
 - [Local vs. Production Traffic Routing](#local-vs-production-traffic-routing)
 - [Prerequisites](#prerequisites)
 - [Setup Guide](#setup-guide)
+- [Local Development (docker compose)](#local-development-docker-compose)
 - [Operations & Makefile Commands](#operations--makefile-commands)
 - [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
@@ -163,6 +164,63 @@ frontend's nginx (`server_name _`) ignores it.
    ```bash
    make down
    ```
+
+## Local Development (docker compose)
+
+[`docker-compose.yml`](docker-compose.yml) runs the whole application locally
+(Postgres, ZooKeeper + Kafka, `wallet-service`, `order-service`, `frontend`)
+with the same ports, env vars and Kafka topic as the EKS deployment. It needs no
+AWS, Vault or Kubernetes, only Docker with Compose v2.
+
+```bash
+make local-up      # first run creates .env (random local DB password), then builds and starts everything, waiting for healthchecks
+make local-smoke   # end-to-end check (below)
+open http://localhost:8088
+make local-down    # stop (keeps data); `make local-clean` also deletes the volumes
+```
+
+**Startup order** (enforced with `depends_on` health conditions):
+`postgres` (pg_isready) and `zookeeper` → `kafka` (broker answers) →
+`kafka-init` (one-shot: creates `crypto-orders`, 3 partitions, RF 1) →
+`wallet-service` + `order-service` (`/health`) → `frontend` (`/healthz`).
+Everything is on one bridge network, `wallet-net`, and containers reach each
+other by service name.
+
+| Service | Host URL (127.0.0.1 only) | In-network address | Key env |
+|---|---|---|---|
+| `frontend` | `http://localhost:8088` | `frontend:8080` | `WALLET_SERVICE_HOST=wallet-service`, `ORDER_SERVICE_HOST=order-service`, `BACKEND_PORT=3000` |
+| `wallet-service` | `http://localhost:3001` | `wallet-service:3000` | `KAFKA_BROKERS=kafka:9092`, `DB_HOST=postgres`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
+| `order-service` | `http://localhost:3002` | `order-service:3000` | `KAFKA_BROKERS=kafka:9092` |
+| `postgres` | `localhost:5432` | `postgres:5432` | `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` from `.env` |
+| `kafka` | `localhost:29092` (EXTERNAL listener) | `kafka:9092` (INTERNAL listener) | PLAINTEXT, single broker |
+
+Host ports, the DB user/name and the password live in `.env` (gitignored; template:
+[`.env.example`](.env.example)). Change a port there if it clashes; 8080 is
+deliberately avoided because `make ingress-forward` uses it.
+
+**What `make local-smoke` verifies** ([`local-dev/smoke-test.sh`](local-dev/smoke-test.sh)),
+entirely through the frontend's nginx proxy, the same path the browser uses:
+1. `local-dev/postgres-init/01-init-schema.sql` still matches
+   `k8s/components/postgres-init-configmap.yaml`.
+2. `/healthz`, `/api/wallet/health` and `/api/order/health` respond, and
+   wallet-service reports Postgres `connected`.
+3. `POST /api/order/orders` (buy 1.5 BTC for a unique `userId`) returns `202`;
+   order-service has published it to Kafka.
+4. Within 60s, `GET /api/wallet/balance/<userId>` shows the balance. This proves
+   that wallet-service's consumer read the event and wrote it to Postgres.
+
+**Manual checks:**
+```bash
+make local-logs SVC=wallet-service      # watch the consumer process orders
+docker compose exec kafka kafka-consumer-groups --bootstrap-server kafka:9092 --describe --group wallet-group
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select * from wallets"'
+```
+
+**Differences from production:** Kafka runs in ZooKeeper mode with Confluent
+images (production uses Bitnami in KRaft mode). The client-facing contract is
+the same: PLAINTEXT on `:9092`, topic `crypto-orders`, consumer group
+`wallet-group`. Credentials come from `.env` rather than Vault → ESO. There is
+no Ingress, HPA or Prometheus/Grafana locally.
 
 ## Operations & Makefile Commands
 

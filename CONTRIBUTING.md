@@ -23,10 +23,12 @@ Pull Request.
    own service images to a throwaway Kind cluster and runs
    `tests/performance/load-test.js` through it. All must pass before
    merging.
-4. `main`'s only writer besides a merged PR is
-   [ci.yml](.github/workflows/ci.yml)'s `update-manifests` job, which pins
-   Deployment image tags after a build — that's an automated, narrowly
-   scoped exception, not a precedent for pushing other changes directly.
+4. Every change to `main` arrives through a PR, which the "Protect main branche"
+   ruleset enforces. That includes [ci.yml](.github/workflows/ci.yml)'s
+   `update-manifests` job: it pins Deployment image tags after a build by
+   opening a `chore/pin-images-<sha>` PR and squash-merging it itself. That
+   self-merge is an automated, narrowly scoped exception, not a precedent for
+   merging other changes without review.
 
 ## Validating against the live cluster before merging
 

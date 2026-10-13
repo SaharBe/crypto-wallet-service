@@ -4,14 +4,31 @@ npm-debug.log
 
 # Docker local data
 .pgdata/
-k8s/bootstrap-secrets/repo-secret.yaml
 
-# Bootstrap-time secrets (DB creds, GitHub PAT, Vault token) — never committed
+# ── Secrets: never committed. Only the *.example templates are tracked. ──
+# Bootstrap-time secrets (DB creds, GitHub PAT, Vault token)
 secrets.env
-
-# Stray Terraform state (real state now lives under terraform/*/ + remote backend)
-/terraform.tfstate
-/terraform.tfstate.backup
-
+# Bootstrap repo credential Secret (seeded imperatively by bootstrap.sh)
+k8s/bootstrap-secrets/repo-secret.yaml
 # Local docker compose settings (generated from .env.example by `make local-up`)
 .env
+.env.*
+!.env.example
+# Keys, certificates and kubeconfigs
+*.pem
+*.key
+*.p12
+*.pfx
+kubeconfig*
+*.kubeconfig
+
+# ── Terraform: repo-wide, so a `terraform init/apply` run from any directory
+# can't leak state. terraform/.gitignore repeats these for that subtree. ──
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+crash.log
+backend.hcl

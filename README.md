@@ -1,47 +1,71 @@
-# Crypto Wallet Service
+# Crypto Wallet Service: a GitOps Internal Developer Platform
 
-A microservices-based crypto wallet platform, deployed on **AWS EKS** with a
-full GitOps toolchain: **ArgoCD** (App-of-Apps), **HashiCorp Vault** +
-**External Secrets Operator**, **Kyverno** policy enforcement, **HPA**
-autoscaling, and **ingress-nginx** L7 routing. Built as a hands-on platform
-engineering portfolio project — the point isn't the wallet app itself, it's
-everything around it: GitOps delivery, policy-as-code, secret management,
-observability, and load-tested autoscaling, done the way a real platform
-team would do it.
+[![PR Checks](https://github.com/SaharBe/crypto-wallet-service/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/SaharBe/crypto-wallet-service/actions/workflows/pr-checks.yml)
+[![CI/CD](https://github.com/SaharBe/crypto-wallet-service/actions/workflows/ci.yml/badge.svg)](https://github.com/SaharBe/crypto-wallet-service/actions/workflows/ci.yml)
 
-> For the secrets/GitOps control-plane flow in detail (Vault, External
-> Secrets, the ArgoCD App-of-Apps wave ordering), see [architecture.md](architecture.md).
-> For contributing conventions (branching, PRs, live-cluster validation),
-> see [CONTRIBUTING.md](CONTRIBUTING.md). For the k6 load-testing suite, see
-> [tests/performance/README.md](tests/performance/README.md).
+This is a platform-engineering portfolio project. It is a small event-driven
+crypto wallet (Node.js microservices, Kafka, PostgreSQL) running on an
+**internal developer platform**. The platform is built the way a real
+platform team would build one:
+
+- **Git is the only way to change the cluster.** ArgoCD reconciles every
+  component from this repository (App-of-Apps plus an ApplicationSet), with
+  `selfHeal` and `prune` turned on.
+- **Secrets never touch git.** HashiCorp Vault holds them, and External
+  Secrets Operator syncs them into the cluster. Vault itself is configured
+  by Terraform.
+- **Policy-as-code at admission.** Kyverno rejects any workload Pod that
+  lacks CPU and memory limits.
+- **Observable and load-tested.** Prometheus and Grafana come with
+  dashboards stored as code. k6 load tests push their metrics into
+  Prometheus, and every PR runs a k6 performance gate on an ephemeral Kind
+  cluster.
+- **Fully automated delivery.** A merge to `main` builds images, pushes
+  them to ECR, and pins the new immutable tag in the manifests through an
+  auto-merged PR. ArgoCD then rolls the change out. Nobody runs
+  `kubectl apply` by hand.
+
+The wallet app is deliberately simple. The point of the project is
+everything around it.
+
+> **Deeper reading:** [architecture.md](architecture.md) (component
+> breakdown, sync waves, secret flow, CI/CD pipeline) ·
+> [CONTRIBUTING.md](CONTRIBUTING.md) (branching, PRs, live-cluster
+> validation) · [tests/performance/README.md](tests/performance/README.md)
+> (k6 suite)
 
 ## Table of Contents
 
-- [Architecture](#architecture)
-- [Local vs. Production Traffic Routing](#local-vs-production-traffic-routing)
+- [Architecture at a Glance](#architecture-at-a-glance)
+- [Tech Stack](#tech-stack)
+- [Repository Layout](#repository-layout)
 - [Prerequisites](#prerequisites)
-- [Setup Guide](#setup-guide)
-- [Local Development (docker compose)](#local-development-docker-compose)
+- [Quickstart A: Local Development (Docker Compose)](#quickstart-a-local-development-docker-compose)
+- [Quickstart B: Cloud Deployment (Terraform + EKS + ArgoCD)](#quickstart-b-cloud-deployment-terraform--eks--argocd)
+- [Local vs. Production Traffic Routing](#local-vs-production-traffic-routing)
 - [Operations & Makefile Commands](#operations--makefile-commands)
 - [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
+- [Security Model](#security-model)
 - [Development & Contributing Workflow](#development--contributing-workflow)
 
-## Architecture
+## Architecture at a Glance
 
-**Services** (`services/`, each its own Deployment + Service in
-`k8s/components/`):
+**Services** live in `services/`. Each one is a Deployment plus a Service in
+`k8s/components/`, namespace `crypto-wallet-app`:
 
-- **frontend** — static SPA served by nginx, same-origin-proxies
-  `/api/wallet/*` and `/api/order/*` to the backend Services (no CORS).
-- **order-service** (Express + KafkaJS) — accepts `POST /orders`, publishes
-  to the `crypto-orders` Kafka topic, returns `202 Accepted` immediately —
-  order processing is asynchronous.
-- **wallet-service** (Express + KafkaJS + `pg`) — consumes `crypto-orders`,
-  applies the balance delta in PostgreSQL, serves `GET /balance/:userId`.
-- **postgres-db** — the wallet ledger.
-- **Kafka** (Bitnami chart, `k8s/apps/kafka-app.yaml`) — decouples order
-  intake from wallet-balance updates.
+- **frontend** (nginx): serves a static SPA and proxies `/api/wallet/*` and
+  `/api/order/*` to the backend Services on the same origin, so no CORS is
+  needed.
+- **order-service** (Express + KafkaJS): accepts `POST /orders`, publishes
+  the order to the `crypto-orders` Kafka topic, and returns
+  `202 Accepted` right away. Orders are processed asynchronously.
+- **wallet-service** (Express + KafkaJS + `pg`): consumes `crypto-orders`,
+  applies the balance change in PostgreSQL, and serves
+  `GET /balance/:userId`.
+- **postgres-db**: the wallet ledger, stored on a `gp3` EBS volume.
+- **Kafka** (Bitnami chart, KRaft mode): decouples order intake from
+  wallet-balance updates.
 
 ```mermaid
 flowchart LR
@@ -62,131 +86,92 @@ flowchart LR
     classDef ctl fill:#e0e7ff,stroke:#4338ca,color:#1e1b4b
 ```
 
-**Control plane** — a single `root-application` (App-of-Apps,
-`k8s/root-app.yaml`) points ArgoCD at `k8s/apps/`, which fans out into one
-`Application`/`ApplicationSet` per concern: ingress-nginx, Kyverno + its
-policies, Vault, External Secrets, Kafka, metrics-server, the monitoring
-stack, and the wallet app itself (`k8s/components/` via
-`crypto-wallet-appset.yaml`). Everything reconciles continuously with
-`selfHeal: true` — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to safely
-validate a live change against the cluster without ArgoCD fighting you over
-it.
+**Control plane:** a single `root-application` (App-of-Apps,
+`k8s/root-app.yaml`) points ArgoCD at `k8s/apps/`. That directory fans out
+into one `Application` or `ApplicationSet` per concern: ingress-nginx,
+Kyverno and its policies, Vault, External Secrets, Kafka, metrics-server,
+the monitoring stack, and the wallet app itself. Sync waves order the
+bootstrap so that CRDs and secret stores exist before anything consumes
+them. [architecture.md](architecture.md) covers the full breakdown.
 
-## Local vs. Production Traffic Routing
+## Tech Stack
 
-In a production-grade deployment of this platform, the ingress-nginx
-controller's Service would be `type: LoadBalancer`, provisioning a cloud
-load balancer (AWS **ALB/NLB**) with a public IP, fronted by a DNS record
-(e.g. `wallet.example.com`) pointing at it. Traffic would flow:
+| Area | Technology | Role in the platform |
+|---|---|---|
+| Cloud & IaC | **AWS EKS 1.31**, VPC, ECR, EBS CSI · **Terraform** | 3× `t3.medium` managed node group in private subnets. Remote state in S3 with a DynamoDB lock table (`terraform/state-backend`) |
+| Orchestration | **Kubernetes**, **Kustomize** | Base manifests in `k8s/components`, plus a CI overlay for Kind |
+| GitOps | **ArgoCD** (App-of-Apps + ApplicationSet) | Continuous reconciliation from `main` with `selfHeal` + `prune` |
+| Secrets | **HashiCorp Vault** + **External Secrets Operator** | Vault KV v2 with Kubernetes auth and one scoped role per consumer, configured by Terraform (`terraform/vault-config`) |
+| Policy | **Kyverno** | `require-resource-limits` ClusterPolicy in **Enforce** mode |
+| Ingress | **ingress-nginx** | Host-based L7 routing for `wallet`, `argocd`, `grafana` and `vault` `.local` |
+| Autoscaling | **HPA** + **metrics-server** | CPU-based scaling for all three services |
+| Messaging | **Apache Kafka** (Bitnami chart, KRaft) + **kafka-exporter** | Async order pipeline, with consumer-lag metrics |
+| Database | **PostgreSQL** | Wallet ledger; credentials delivered from Vault |
+| Services | **Node.js** (Express, KafkaJS, `pg`), **nginx** | `order-service`, `wallet-service`, `frontend` |
+| Observability | **Prometheus** + **Grafana** (kube-prometheus-stack) | Dashboards stored as JSON in git. The remote-write receiver ingests k6 metrics |
+| Performance | **k6** | Load, spike and Kafka-pipeline stress scripts, run locally or as an ephemeral in-cluster Pod |
+| CI/CD | **GitHub Actions** | PR gate (lint, kustomize, kubeconform, helm template, k6 on Kind) and build → ECR → auto-pin pipeline |
+| Local dev | **Docker Compose** | The full app stack with no cloud dependencies |
+
+## Repository Layout
 
 ```
-Internet -> DNS -> Cloud LB (ALB/NLB) -> ingress-nginx -> frontend -> {order,wallet}-service
+.
+├── services/                 # order-service, wallet-service (Node.js), frontend (nginx)
+├── k8s/
+│   ├── root-app.yaml         # App-of-Apps entry point (applied once by bootstrap.sh)
+│   ├── apps/                 # One ArgoCD Application per platform concern (+ ApplicationSet)
+│   ├── components/           # Wallet app base manifests (Deployments, HPA, ExternalSecret, Postgres)
+│   ├── overlays/ci/          # Kind overlay used by the PR performance gate
+│   └── bootstrap-secrets/    # Template for the one imperatively-seeded repo credential
+├── terraform/
+│   ├── state-backend/        # S3 + DynamoDB remote state (run first)
+│   ├── infra/                # VPC, EKS, ECR, EBS CSI driver
+│   ├── vault-config/         # Vault auth, policies, roles, KV secrets
+│   └── modules/vault-config/ # Reusable "one consumer = one role + policy + secret" module
+├── tests/performance/        # k6 scripts + in-cluster runner
+├── local-dev/                # Compose init SQL + end-to-end smoke test
+├── scripts/                  # setup-hosts, CI helpers
+├── docker-compose.yml        # Local stack
+├── bootstrap.sh              # End-to-end cloud bootstrap (`make up`)
+└── Makefile                  # Single operations entry point (`make help`)
 ```
-
-This project runs on a **real AWS EKS cluster**, but deliberately keeps the
-ingress-nginx Service as `ClusterIP` (see `k8s/apps/ingress-nginx-app.yaml`)
-instead of provisioning a billable, publicly-routable AWS ELB for what is a
-single-node learning/portfolio environment. So locally, `make
-ingress-forward` stands in for that public entry point:
-
-```
-kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80
-```
-
-This is the same L7 entry point production traffic would hit — it just
-reaches it over a port-forward tunnel instead of a LoadBalancer IP. The
-Ingress resource (`k8s/apps/ingress/wallet-ingress.yaml`) routes purely on
-the `Host` header (`host: wallet.local`), the same virtual-hosting mechanism
-a real DNS name would drive in production. `make setup-hosts` maps
-`wallet.local` (and `argocd.local` / `grafana.local` / `vault.local`) to
-`127.0.0.1` for browsing, but `localhost:8080` has no DNS name to convey
-which virtual host a *script* is targeting — so the **k6 load tests send an
-explicit `Host: wallet.local` header on every request**
-(`tests/performance/helpers.js`) rather than relying on `/etc/hosts`. That
-keeps the load test benchmarking the real end-to-end L7 path: ingress-nginx
-host matching and routing, the frontend's reverse proxy, and — under
-sustained load — HPA scaling the backend Deployments, exactly as it would
-behave in production. Point `BASE_URL` anywhere else (e.g. straight at the
-`frontend` Service) and the header is simply redundant, not wrong — the
-frontend's nginx (`server_name _`) ignores it.
 
 ## Prerequisites
 
-| Tool | Used for |
-|---|---|
-| [`kubectl`](https://kubernetes.io/docs/tasks/tools/) | Talking to the EKS cluster |
-| [AWS CLI](https://aws.amazon.com/cli/) (configured) | EKS auth, ECR login |
-| [`terraform`](https://developer.hashicorp.com/terraform/install) | Provisioning EKS + Vault config |
-| [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) | Bootstrap-time admin login/verification |
-| [`helm`](https://helm.sh/docs/intro/install/) | Not invoked directly — ArgoCD renders the Helm-based Applications (ingress-nginx, Kyverno, Kafka, monitoring) itself |
-| [`k6`](https://k6.io/docs/get-started/installation/) | Load testing (or just Docker — `make test-load` falls back to the `grafana/k6` image) |
-| `make` | Everything below runs through the root `Makefile` |
-| `envsubst` (`gettext` package) | Bootstrap-time templating of `k8s/root-app.yaml` |
-| Docker | Building/pushing service images (`make build`) |
+| Tool | Local path (A) | Cloud path (B) | Used for |
+|---|:---:|:---:|---|
+| [Docker](https://docs.docker.com/get-docker/) with Compose v2 | ✅ | ✅ | Running the local stack and building images (`make build`) |
+| `make`, `bash`, `curl` | ✅ | ✅ | Every workflow runs through the root `Makefile` |
+| [`kubectl`](https://kubernetes.io/docs/tasks/tools/) | | ✅ | Talking to the EKS cluster |
+| [AWS CLI](https://aws.amazon.com/cli/) (configured) | | ✅ | EKS auth and ECR login |
+| [`terraform`](https://developer.hashicorp.com/terraform/install) | | ✅ | Provisioning AWS infrastructure and configuring Vault |
+| [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) | | ✅ | Admin login and verification at bootstrap |
+| `envsubst` (`gettext` package) | | ✅ | Templating `k8s/root-app.yaml` at bootstrap |
+| [`k6`](https://k6.io/docs/get-started/installation/) | optional | optional | Load testing. Without it, `make test-load` falls back to the `grafana/k6` Docker image |
+| [`helm`](https://helm.sh/docs/intro/install/) | | optional | Only for running the Helm-values PR check locally. ArgoCD renders the charts itself |
 
-## Setup Guide
+The cloud path provisions **billable AWS resources** (EKS control plane,
+3 EC2 nodes, NAT gateway, EBS volumes). Run `make down` when you are done.
 
-1. **Configure secrets**
-   ```bash
-   cp secrets.env.example secrets.env
-   # fill in REPO_URL, VAULT_TOKEN, DB_USERNAME/PASSWORD, GITHUB_USERNAME/PAT,
-   # ARGOCD_ADMIN_PASSWORD
-   ```
+## Quickstart A: Local Development (Docker Compose)
 
-2. **Spin up the stack** — provisions EKS via Terraform, installs ArgoCD,
-   seeds the repo credential + admin password, applies the App-of-Apps,
-   and configures Vault:
-   ```bash
-   make up          # runs ./bootstrap.sh end-to-end
-   ```
-
-3. **Point local hostnames at the port-forward you're about to start:**
-   ```bash
-   make setup-hosts   # adds wallet.local / argocd.local / grafana.local / vault.local -> 127.0.0.1
-   ```
-
-4. **Open the local entry point** (leave running in its own terminal):
-   ```bash
-   make ingress-forward
-   ```
-   Browse `http://wallet.local:8080`, `http://argocd.local:8080`,
-   `http://grafana.local:8080`.
-
-5. **Build & push service images**, if you've changed `services/*` (needs
-   `ECR_REGISTRY` in `secrets.env`):
-   ```bash
-   make build
-   ```
-   ArgoCD/CI handle deploying new image tags — see
-   [CONTRIBUTING.md](CONTRIBUTING.md) for the branch/PR flow.
-
-6. **Tear down** when done (destroys the Terraform-provisioned AWS infra):
-   ```bash
-   make down
-   ```
-
-## Local Development (docker compose)
-
-[`docker-compose.yml`](docker-compose.yml) runs the whole application locally
-(Postgres, ZooKeeper + Kafka, `wallet-service`, `order-service`, `frontend`)
-with the same ports, env vars and Kafka topic as the EKS deployment. It needs no
-AWS, Vault or Kubernetes, only Docker with Compose v2.
+This path runs the whole application on your machine: Postgres, ZooKeeper
+and Kafka, `wallet-service`, `order-service` and `frontend`. It uses the
+same ports, environment variables and Kafka topic as the EKS deployment.
+It needs no AWS account, Vault or Kubernetes, only Docker with Compose v2.
 
 ```bash
-make local-up      # first run creates .env (random local DB password), then builds and starts everything, waiting for healthchecks
-make local-smoke   # end-to-end check (below)
-open http://localhost:8088
-make local-down    # stop (keeps data); `make local-clean` also deletes the volumes
+make local-up      # first run creates .env with a random local DB password, then builds, starts and waits for healthchecks
+make local-smoke   # end-to-end verification (see below)
+open http://localhost:8088   # or xdg-open on Linux
+make local-down    # stop and keep the data
+make local-clean   # stop AND delete the volumes (Postgres/Kafka data; init SQL runs again next time)
 ```
 
-**Startup order** (enforced with `depends_on` health conditions):
-`postgres` (pg_isready) and `zookeeper` → `kafka` (broker answers) →
-`kafka-init` (one-shot: creates `crypto-orders`, 3 partitions, RF 1) →
-`wallet-service` + `order-service` (`/health`) → `frontend` (`/healthz`).
-Everything is on one bridge network, `wallet-net`, and containers reach each
-other by service name.
+**Ports.** All are bound to `127.0.0.1` only and can be changed in `.env`.
 
-| Service | Host URL (127.0.0.1 only) | In-network address | Key env |
+| Service | Host URL | In-network address | Key env |
 |---|---|---|---|
 | `frontend` | `http://localhost:8088` | `frontend:8080` | `WALLET_SERVICE_HOST=wallet-service`, `ORDER_SERVICE_HOST=order-service`, `BACKEND_PORT=3000` |
 | `wallet-service` | `http://localhost:3001` | `wallet-service:3000` | `KAFKA_BROKERS=kafka:9092`, `DB_HOST=postgres`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
@@ -194,123 +179,264 @@ other by service name.
 | `postgres` | `localhost:5432` | `postgres:5432` | `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` from `.env` |
 | `kafka` | `localhost:29092` (EXTERNAL listener) | `kafka:9092` (INTERNAL listener) | PLAINTEXT, single broker |
 
-Host ports, the DB user/name and the password live in `.env` (gitignored; template:
-[`.env.example`](.env.example)). Change a port there if it clashes; 8080 is
-deliberately avoided because `make ingress-forward` uses it.
+Port 8080 is avoided on purpose, because `make ingress-forward` uses it
+for the cloud path. `.env` is gitignored and generated from
+[`.env.example`](.env.example).
 
-**What `make local-smoke` verifies** ([`local-dev/smoke-test.sh`](local-dev/smoke-test.sh)),
-entirely through the frontend's nginx proxy, the same path the browser uses:
+**Startup order** is enforced with `depends_on` health conditions:
+`postgres` (pg_isready) and `zookeeper` → `kafka` (broker answers) →
+`kafka-init` (one-shot job that creates `crypto-orders` with 3 partitions,
+RF 1) → `wallet-service` + `order-service` (`/health`) → `frontend`
+(`/healthz`). Everything shares one bridge network, `wallet-net`.
+
+**What `make local-smoke` verifies** ([`local-dev/smoke-test.sh`](local-dev/smoke-test.sh)).
+Every check goes through the frontend's nginx proxy, the same path the
+browser uses:
+
 1. `local-dev/postgres-init/01-init-schema.sql` still matches
-   `k8s/components/postgres-init-configmap.yaml`.
+   `k8s/components/postgres-init-configmap.yaml`, so local and cluster
+   schemas cannot drift.
 2. `/healthz`, `/api/wallet/health` and `/api/order/health` respond, and
-   wallet-service reports Postgres `connected`.
-3. `POST /api/order/orders` (buy 1.5 BTC for a unique `userId`) returns `202`;
-   order-service has published it to Kafka.
-4. Within 60s, `GET /api/wallet/balance/<userId>` shows the balance. This proves
-   that wallet-service's consumer read the event and wrote it to Postgres.
+   wallet-service reports Postgres as `connected`.
+3. `POST /api/order/orders` (buy 1.5 BTC for a unique `userId`) returns
+   `202`, meaning order-service published the order to Kafka.
+4. Within 60s, `GET /api/wallet/balance/<userId>` shows the new balance.
+   This proves that wallet-service consumed the event and wrote it to
+   Postgres.
 
 **Manual checks:**
+
 ```bash
 make local-logs SVC=wallet-service      # watch the consumer process orders
 docker compose exec kafka kafka-consumer-groups --bootstrap-server kafka:9092 --describe --group wallet-group
 docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select * from wallets"'
 ```
 
-**Differences from production:** Kafka runs in ZooKeeper mode with Confluent
-images (production uses Bitnami in KRaft mode). The client-facing contract is
-the same: PLAINTEXT on `:9092`, topic `crypto-orders`, consumer group
-`wallet-group`. Credentials come from `.env` rather than Vault → ESO. There is
-no Ingress, HPA or Prometheus/Grafana locally.
+**Differences from production.** Local Kafka runs in ZooKeeper mode on
+Confluent images, while production uses Bitnami in KRaft mode. The
+client-facing contract is identical: PLAINTEXT on `:9092`, topic
+`crypto-orders`, consumer group `wallet-group`. Local credentials come
+from `.env` rather than from Vault → ESO. There is no Ingress, HPA,
+Kyverno or Prometheus/Grafana locally.
+
+## Quickstart B: Cloud Deployment (Terraform + EKS + ArgoCD)
+
+1. **Create the remote-state backend.** This is a one-time step per AWS
+   account:
+   ```bash
+   terraform -chdir=terraform/state-backend init
+   terraform -chdir=terraform/state-backend apply
+   terraform -chdir=terraform/state-backend output   # bucket + lock table names
+   ```
+   Copy `terraform/infra/backend.hcl.example` and
+   `terraform/vault-config/backend.hcl.example` to `backend.hcl` in the
+   same directories, then fill them in from those outputs. Both copies are
+   gitignored.
+
+2. **Configure bootstrap secrets.** They are read from a gitignored file
+   and never committed:
+   ```bash
+   cp secrets.env.example secrets.env
+   # fill in REPO_URL, VAULT_TOKEN, DB_USERNAME/PASSWORD, GITHUB_USERNAME/PAT,
+   # ARGOCD_ADMIN_PASSWORD, ECR_REGISTRY
+   ```
+
+3. **Bring the platform up:**
+   ```bash
+   make up          # runs ./bootstrap.sh end to end
+   ```
+   `bootstrap.sh` takes these steps:
+   1. Provisions VPC, EKS, ECR and the EBS CSI driver with Terraform.
+   2. Builds the first service images and pushes them to ECR.
+   3. Installs ArgoCD and sets the admin password.
+   4. Seeds the one bootstrap repo credential and applies the App-of-Apps.
+   5. Runs `make vault-init` as soon as Vault is healthy.
+   6. Waits for every Application to become Synced/Healthy.
+
+   From then on ArgoCD owns everything in `k8s/apps/`.
+
+4. **Open the entry point.** Bootstrap tries to map the `*.local`
+   hostnames for you; if it couldn't, run `make setup-hosts`. Leave the
+   port-forward running in its own terminal:
+   ```bash
+   make ingress-forward # ingress-nginx -> localhost:8080
+   ```
+   Then browse `http://wallet.local:8080`, `http://argocd.local:8080`
+   (`make argocd-password` prints the login) and
+   `http://grafana.local:8080`.
+
+5. **Verify the deployment:**
+   ```bash
+   kubectl get applications -n argocd             # every app Synced / Healthy
+   kubectl get pods -n crypto-wallet-app
+   kubectl get externalsecrets -A                 # SecretSynced = True
+   kubectl get clusterpolicy                      # Kyverno policy Ready
+   make test-load K6_MODE=cluster                 # in-cluster k6 run → Grafana "Performance & Load" dashboard
+   ```
+
+6. **Ship a change.** Open a PR. Once it merges, CI builds the images and
+   pins them, and ArgoCD rolls them out (see [CI/CD](#cicd)). `make build`
+   pushes images manually if you ever need it.
+
+7. **Tear down.** This destroys the Terraform-provisioned AWS
+   infrastructure and auto-approves the destroy:
+   ```bash
+   make down
+   ```
+
+## Local vs. Production Traffic Routing
+
+In a production deployment, the ingress-nginx controller's Service would
+be `type: LoadBalancer`. That provisions an AWS **ALB/NLB** with a public
+IP, and a DNS record (e.g. `wallet.example.com`) points at it:
+
+```
+Internet -> DNS -> Cloud LB (ALB/NLB) -> ingress-nginx -> frontend -> {order,wallet}-service
+```
+
+This project runs on a **real EKS cluster** but keeps the ingress-nginx
+Service as `ClusterIP` on purpose (see `k8s/apps/ingress-nginx-app.yaml`).
+That avoids paying for a publicly routable ELB in a portfolio environment.
+`make ingress-forward` stands in for the public entry point instead:
+
+```
+kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80
+```
+
+This is the same L7 entry point that production traffic would hit, reached
+over a port-forward tunnel instead of a LoadBalancer IP. The Ingress
+(`k8s/apps/ingress/wallet-ingress.yaml`) routes purely on the `Host`
+header (`host: wallet.local`), the same virtual-hosting mechanism a real
+DNS name would drive. A script calling `localhost:8080` has no DNS name to
+pick a virtual host, so the **k6 tests send an explicit
+`Host: wallet.local` header** (`tests/performance/helpers.js`). The load
+test therefore exercises the real end-to-end path: ingress host matching,
+the frontend's reverse proxy, and HPA scaling of the backends.
 
 ## Operations & Makefile Commands
 
-Run `make help` for the full, always-up-to-date list. The ones used day to
-day:
+`make help` prints the full, always-current list.
 
 | Command | What it does |
 |---|---|
-| `make ingress-forward` | Port-forwards ingress-nginx to `localhost:8080` — the local stand-in for a production load balancer |
-| `make setup-hosts` | Adds `*.local` hostnames to `/etc/hosts`, pointed at the port-forward |
-| `make test-load` | Runs the default k6 script (`load-test.js`) locally against `BASE_URL` (default `http://localhost:8080`), with `Host: wallet.local` set automatically |
-| `make test-load K6_SCRIPT=spike-test.js` | Runs a specific script — `load-test.js` \| `spike-test.js` \| `kafka-pipeline-stress.js` |
-| `make test-load K6_MODE=cluster K6_SCRIPT=spike-test.js` | Runs the script as an ephemeral in-cluster k6 Pod instead, hitting the `frontend` Service directly (no port-forward, no Ingress hop) |
+| `make local-up` / `local-smoke` / `local-logs` / `local-down` / `local-clean` | Docker Compose lifecycle (Quickstart A) |
+| `make up` / `make down` | Bootstrap or destroy the cloud platform (Quickstart B) |
+| `make ingress-forward` | Port-forwards ingress-nginx to `localhost:8080`, the local stand-in for a load balancer |
+| `make setup-hosts` | Adds the `*.local` hostnames to `/etc/hosts` |
+| `make vault-init` | Re-applies the Vault Terraform config. Safe to re-run |
+| `make build` | Builds all service images and pushes them to ECR |
 | `make argocd-password` | Prints the ArgoCD admin login for the UI |
-| `make vault-init` | (Re-)applies the Vault Terraform config — safe to re-run |
+| `make test-load` | Runs `load-test.js` against `BASE_URL` (default `http://localhost:8080`) with `Host: wallet.local` |
+| `make test-load K6_SCRIPT=spike-test.js` | Runs a specific script: `load-test.js`, `spike-test.js` or `kafka-pipeline-stress.js` |
+| `make test-load K6_MODE=cluster` | Runs k6 as an ephemeral in-cluster Pod that hits the `frontend` Service directly and pushes metrics to Prometheus |
 
-**Verifying a load test run:**
+To watch autoscaling during a load test:
+
 ```bash
 kubectl get hpa,pods -n crypto-wallet-app -w
 ```
-Watch replica counts climb under `load-test.js`'s 3-minute ramp, and watch
-for `Pending`/restarting pods if a spike (`spike-test.js`) outruns the
-cluster's capacity — see [tests/performance/README.md](tests/performance/README.md)
-for what to look at in Grafana alongside it.
 
 ## CI/CD
 
-Every PR against `main` runs [PR Checks](.github/workflows/pr-checks.yml).
-Alongside the static checks (YAML lint, `kustomize build`, `kubeconform`,
-`helm template`), a `k6-performance-sanity` job now validates real
-performance before merge: it spins up a throwaway Kind cluster, builds the
-PR's own `services/*` images from source and loads them straight in (no
-ECR credentials needed, and it's actually testing this PR's code, not
-whatever's already deployed), installs `ingress-nginx` and a single-node
-Kafka broker, deploys the app via the CI-only overlay in
-[k8s/overlays/ci](k8s/overlays/ci), and runs
-[`tests/performance/load-test.js`](tests/performance/load-test.js) through
-`ingress-nginx` with the same `Host: wallet.local` routing used locally
-(`make ingress-forward` + `make test-load`). The PR fails if that script's
-SLOs (`p95 < 200ms`, error rate `< 1%`) aren't met.
+Two GitHub Actions workflows cover the full path from PR to running pods.
 
-The Kind overlay necessarily diverges from prod in a couple of spots a
-fresh cluster can't provide: a plain Secret stands in for the Vault-backed
-`ExternalSecret`, and Postgres targets Kind's built-in `standard`
-StorageClass instead of `gp3`. See that overlay's `kustomization.yaml` and
-the job itself for the reasoning.
+**1. PR gate: [`pr-checks.yml`](.github/workflows/pr-checks.yml).** It runs
+on every PR to `main`:
+
+| Job | What it checks |
+|---|---|
+| YAML lint | `yamllint` on every changed YAML file |
+| Kustomize build | `kubectl kustomize` on every `kustomization.yaml` in the repo |
+| Schema validation | `kubeconform -strict` on all rendered manifests, including ArgoCD, ESO and Kyverno CRD schemas, fully offline |
+| Helm values | `helm template` for each chart-sourced ArgoCD Application with its inline `values` |
+| **k6 performance sanity** | Creates a throwaway **Kind** cluster, builds the PR's own service images from source, deploys them via [`k8s/overlays/ci`](k8s/overlays/ci) behind ingress-nginx and Kafka, and runs `load-test.js`. The PR fails unless `p95 < 200ms` and error rate `< 1%` |
+
+The Kind overlay differs from production only where a fresh cluster
+can't provide something. A plain fixture Secret replaces the Vault-backed
+`ExternalSecret`, and Postgres uses Kind's `standard` StorageClass instead
+of `gp3`.
+
+**2. Delivery with automated image pinning: [`ci.yml`](.github/workflows/ci.yml).**
+It runs on pushes to `main` that touch `services/**`:
+
+1. `build-and-push` builds each service in a matrix and pushes it to ECR
+   under two tags: the immutable **commit SHA** and `:latest`.
+2. `update-manifests` rewrites the `image:` lines in
+   `k8s/components/{wallet-service,order-service,frontend}.yaml` to that
+   SHA. It opens a `chore/pin-images-<sha>` PR, squash-merges it itself,
+   and deletes the branch.
+3. ArgoCD detects the manifest change and rolls the new pods out.
+
+Pinning to the SHA is what makes deployments work. ArgoCD only reacts to a
+change in git, and a re-pushed `:latest` never changes the manifest. The
+pin also makes every running image traceable to a commit and revertible
+with `git revert`. The pin lands through a PR rather than a direct push
+because the `main` branch ruleset applies to CI too.
+[architecture.md](architecture.md#9-cicd-pipeline-and-automated-image-pinning)
+has the sequence diagram.
 
 ## Autoscaling & Resilience Strategy
 
-Each of `frontend`, `order-service`, and `wallet-service` has its own
-`HorizontalPodAutoscaler` (`k8s/components/hpa.yaml`): CPU-utilization
-target of **70%**, `minReplicas: 1`, `maxReplicas: 3`, backed by
-metrics-server (`k8s/apps/metrics-server-app.yaml`) for the
-`metrics.k8s.io` API HPA polls. ArgoCD's `crypto-wallet-appset.yaml`
-carries a matching `ignoreDifferences` on `spec.replicas` for all three
-Deployments, so `selfHeal` doesn't fight the HPA back down to its static
-replica count every sync.
+Each of `frontend`, `order-service` and `wallet-service` has its own
+`HorizontalPodAutoscaler` (`k8s/components/hpa.yaml`) with a **70%** CPU
+target, `minReplicas: 1` and `maxReplicas: 3`. metrics-server provides the
+`metrics.k8s.io` API that the HPAs poll. The ApplicationSet ignores
+`spec.replicas` on these Deployments (`ignoreDifferences`), so `selfHeal`
+doesn't fight the HPA.
 
-Resource `limits` on every container are mandatory, not just advisory —
-Kyverno's `require-resource-limits` `ClusterPolicy`
-(`k8s/apps/kyverno-policies/disallow-missing-limits.yaml`) rejects any Pod
-outside `kube-system`/`argocd`/`kyverno`/`monitoring` that's missing CPU or
-memory limits, at admission time.
+Resource limits are mandatory, not advisory. Kyverno's
+`require-resource-limits` ClusterPolicy rejects any Pod outside
+`kube-system`, `argocd`, `kyverno` and `monitoring` that is missing CPU or
+memory limits.
 
-The three k6 scripts exercise this from different angles:
+The three k6 scripts test the system from different angles:
 
-- **`load-test.js`** — a realistic journey (get balance → place order →
-  poll until processed) ramped 5→100 VUs over 3 minutes, soaked, then
-  ramped down — the shape that should drive a clean, gradual HPA scale-out.
-- **`spike-test.js`** — 0→300 VUs in 15 seconds, held, then dropped.
-  Thresholds (`p95 < 200ms`, `error rate < 1%`) are *expected* to fail here
-  — the point is finding where the stack breaks and how (slow responses vs.
-  hard errors vs. OOMKills), not passing cleanly.
-- **`kafka-pipeline-stress.js`** — fixed arrival-rate firehose at the
-  Kafka producer/consumer pipeline specifically, independent of VU count,
-  measuring order-to-balance processing lag end-to-end.
+- **`load-test.js`**: a realistic user journey (get balance → place order
+  → poll until processed), ramped from 5 to 100 VUs over 3 minutes, held,
+  then ramped down. This shape should drive a clean, gradual HPA
+  scale-out.
+- **`spike-test.js`**: 0 to 300 VUs in 15 seconds. Its thresholds are
+  *expected* to fail. The goal is to find where and how the stack breaks
+  (slow responses, hard errors or OOMKills).
+- **`kafka-pipeline-stress.js`**: a fixed arrival-rate firehose aimed at
+  the Kafka pipeline. It measures the end-to-end lag from order to updated
+  balance.
 
-**Known capacity ceiling:** this cluster's node pool hits a hard
-"Too many pods" scheduling limit before CPU/memory usually becomes the
-bottleneck (default AWS-VPC-CNI IP allocation, no prefix delegation). If
-every HPA scales toward `maxReplicas` at once during a sustained test,
-expect some pods to land `Pending` rather than CPU-throttled — that's a
-cluster-sizing characteristic worth knowing going in, not a bug in the
-autoscaling config.
+**Known capacity ceiling:** each `t3.medium` node can hold at most
+**17 pods**, because of the AWS VPC-CNI IP limit without prefix
+delegation. If every HPA scales toward `maxReplicas` at once, some pods
+stay `Pending` ("Too many pods") before CPU or memory runs out. This is a
+known cluster-sizing limit, not a bug in the autoscaling config.
+
+## Security Model
+
+- **No plaintext secrets in git.** Runtime credentials (Postgres, Grafana
+  admin, ArgoCD's repo credential) live in Vault. ESO syncs them into
+  Kubernetes Secrets through `ClusterSecretStore`s, each bound to its own
+  narrowly scoped Vault role and policy.
+- **Gitignored local inputs.** `secrets.env`, `.env`, `*.tfvars`,
+  `backend.hcl`, Terraform state and the bootstrap repo Secret are all
+  ignored. Only `.example` templates are tracked.
+- **Remote, encrypted Terraform state.** State lives in an S3 bucket with
+  versioning, encryption and blocked public access, with a DynamoDB lock
+  table.
+- **Admission control.** Kyverno runs in Enforce mode, and every
+  `kubeconform` and `helm template` check runs on each PR.
+- **Protected `main`.** Every change goes through a PR, including CI's
+  own image pins.
+
+Some settings were chosen for a demo environment and would change in
+production: Vault runs in dev mode, ingress is reached over a
+port-forward, and Kafka uses PLAINTEXT. The
+[production-hardening section in architecture.md](architecture.md#production-hardening-roadmap)
+lists them.
 
 ## Development & Contributing Workflow
 
-No direct pushes to `main` — every change (manifests, Terraform, services,
-docs) goes through a `feat/<task-name>` or `fix/<task-name>` branch and a
-Pull Request opened with `gh pr create`, including changes made by AI/dev
-automation tooling. [PR Checks](.github/workflows/pr-checks.yml) must pass
-before merging, and any live-cluster testing follows the ArgoCD `selfHeal`
-pause/restore protocol. Full details in [CONTRIBUTING.md](CONTRIBUTING.md).
+Nobody pushes directly to `main`. Every change (manifests, Terraform,
+services, docs) goes through a `feat/<task-name>` or `fix/<task-name>`
+branch and a Pull Request opened with `gh pr create`. This also applies
+to changes made by AI and automation tooling.
+[PR Checks](.github/workflows/pr-checks.yml) must pass before merge. Any
+live-cluster testing follows the ArgoCD `selfHeal` pause/restore protocol
+described in [CONTRIBUTING.md](CONTRIBUTING.md).

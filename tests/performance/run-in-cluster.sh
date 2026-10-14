@@ -54,6 +54,7 @@ kubectl run "$POD_NAME" \
   --namespace "$NAMESPACE" \
   --image=grafana/k6:latest \
   --restart=Never \
+  --labels=app=k6-load-generator \
   --rm -i \
   --overrides="$(cat <<EOF
 {

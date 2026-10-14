@@ -1,0 +1,120 @@
+# East-West isolation for crypto-wallet-app (SEC-409). Ingress only: every
+# Pod in the namespace starts closed (default-deny below), then each policy
+# opens exactly one hop of the real request path:
+#
+#   ingress-nginx --8080--> frontend --3000--> wallet-service / order-service
+#                                                       --5432--> postgres
+#
+# Egress is deliberately left open. The services' outbound connections to
+# Kafka (kafka.kafka.svc:9092, its own namespace), CoreDNS and Postgres are
+# not restricted by Ingress-type policies here, so Kafka needs no allow rule
+# in this namespace. Restricting egress would also need explicit DNS/Kafka
+# rules and is out of scope for this pass.
+#
+# Kubelet liveness/readiness probes come from the node, not a Pod, and are
+# allowed by the CNI's NetworkPolicy implementation (AWS VPC CNI network
+# policy agent, kindnet), so no probe rule is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: crypto-wallet-app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# The wallet Ingress (k8s/apps/ingress/wallet-ingress.yaml) is the only
+# external entry point and it targets the frontend Service alone, so the
+# backends are not opened to ingress-nginx; they're reached through the
+# frontend's nginx proxy instead (policy below). Both selectors sit in the
+# same `from` entry (AND, not OR): only the controller Pods, and only from
+# the ingress-nginx namespace. The labels match both the Helm chart
+# (k8s/apps/ingress-nginx-app.yaml) and the Kind provider manifest the CI
+# k6 job installs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-nginx-to-frontend
+  namespace: crypto-wallet-app
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/component: controller
+      ports:
+        - protocol: TCP
+          port: 8080
+    # In-cluster k6 runs (tests/performance/run-in-cluster.sh) hit the
+    # frontend Service directly, bypassing ingress-nginx. That script labels
+    # its ephemeral Pod `app: k6-load-generator` for this rule.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: k6-load-generator
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# The frontend's nginx proxies /api/wallet/* and /api/order/* to these two
+# Services (services/frontend/nginx/default.conf.template); nothing else
+# calls them, and they don't call each other.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backends
+  namespace: crypto-wallet-app
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - wallet-service
+          - order-service
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 3000
+---
+# Postgres (postgres.yaml, Pod label `app: postgres`) only accepts
+# connections from the two backends.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backends-to-postgres
+  namespace: crypto-wallet-app
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - wallet-service
+                  - order-service
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -15,3 +15,4 @@ resources:
   - frontend.yaml
   - external-secret.yaml
   - hpa.yaml
+  - network-policies.yaml

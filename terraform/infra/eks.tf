@@ -21,7 +21,7 @@ module "eks" {
 
       instance_types = ["t3.medium"]
       capacity_type  = "ON_DEMAND"
-      ami_type = "AL2023_x86_64_STANDARD"
+      ami_type       = "AL2023_x86_64_STANDARD"
     }
   }
 
@@ -32,6 +32,25 @@ module "eks" {
     aws-ebs-csi-driver = {
       most_recent              = true
       service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
+    }
+
+    # Brings the VPC CNI under EKS add-on management so it can turn on
+    # NetworkPolicy enforcement (SEC-410). Until now aws-node was the
+    # self-managed copy EKS installs at cluster creation, running with
+    # --enable-network-policy=false: every NetworkPolicy in the cluster
+    # (k8s/components/network-policies.yaml, plus the ones the ArgoCD and
+    # Kafka installs ship) was stored but not enforced.
+    #
+    # Pinned to the version already running, not most_recent: this change
+    # only adopts the DaemonSet and flips one flag, without a CNI upgrade
+    # at the same time. The module's default resolve_conflicts_on_create
+    # (OVERWRITE) takes ownership of the existing aws-node objects; its env
+    # was confirmed to hold only stock values, so nothing custom is lost.
+    vpc-cni = {
+      addon_version = "v1.22.4-eksbuild.3"
+      configuration_values = jsonencode({
+        enableNetworkPolicy = "true"
+      })
     }
   }
 

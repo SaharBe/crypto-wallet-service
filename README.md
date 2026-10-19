@@ -16,6 +16,9 @@ platform team would build one:
   by Terraform.
 - **Policy-as-code at admission.** Kyverno rejects any workload Pod that
   lacks CPU and memory limits.
+- **Zero-trust east-west traffic.** The app namespace is default-deny for
+  ingress. NetworkPolicies open only the real request path, and the EKS
+  VPC CNI enforces them.
 - **Observable and load-tested.** Prometheus and Grafana come with
   dashboards stored as code. k6 load tests push their metrics into
   Prometheus, and every PR runs a k6 performance gate on an ephemeral Kind
@@ -103,6 +106,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 | GitOps | **ArgoCD** (App-of-Apps + ApplicationSet) | Continuous reconciliation from `main` with `selfHeal` + `prune` |
 | Secrets | **HashiCorp Vault** + **External Secrets Operator** | Vault KV v2 with Kubernetes auth and one scoped role per consumer, configured by Terraform (`terraform/vault-config`) |
 | Policy | **Kyverno** | `require-resource-limits` ClusterPolicy in **Enforce** mode |
+| Network isolation | **NetworkPolicy** + **AWS VPC CNI** network policy agent | Default-deny ingress in `crypto-wallet-app`, one allow rule per hop of the request path |
 | Ingress | **ingress-nginx** | Host-based L7 routing for `wallet`, `argocd`, `grafana` and `vault` `.local` |
 | Autoscaling | **HPA** + **metrics-server** | CPU-based scaling for all three services |
 | Messaging | **Apache Kafka** (Bitnami chart, KRaft) + **kafka-exporter** | Async order pipeline, with consumer-lag metrics |
@@ -121,7 +125,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 ├── k8s/
 │   ├── root-app.yaml         # App-of-Apps entry point (applied once by bootstrap.sh)
 │   ├── apps/                 # One ArgoCD Application per platform concern (+ ApplicationSet)
-│   ├── components/           # Wallet app base manifests (Deployments, HPA, ExternalSecret, Postgres)
+│   ├── components/           # Wallet app base manifests (Deployments, HPA, ExternalSecret, Postgres, NetworkPolicies)
 │   ├── overlays/ci/          # Kind overlay used by the PR performance gate
 │   └── bootstrap-secrets/    # Template for the one imperatively-seeded repo credential
 ├── terraform/
@@ -422,12 +426,18 @@ known cluster-sizing limit, not a bug in the autoscaling config.
   table.
 - **Admission control.** Kyverno runs in Enforce mode, and every
   `kubeconform` and `helm template` check runs on each PR.
+- **Network isolation.** `crypto-wallet-app` is default-deny for ingress
+  (`k8s/components/network-policies.yaml`). Only these hops are allowed:
+  ingress-nginx → frontend, frontend → wallet/order-service, and the
+  backends → Postgres (plus the in-cluster k6 Pod → frontend). The EKS
+  VPC CNI add-on runs with `enableNetworkPolicy` (`terraform/infra/eks.tf`),
+  so the policies are enforced and not just stored.
 - **Protected `main`.** Every change goes through a PR, including CI's
   own image pins.
 
 Some settings were chosen for a demo environment and would change in
 production: Vault runs in dev mode, ingress is reached over a
-port-forward, and Kafka uses PLAINTEXT. The
+port-forward, Kafka uses PLAINTEXT, and egress is not yet restricted. The
 [production-hardening section in architecture.md](architecture.md#production-hardening-roadmap)
 lists them.
 

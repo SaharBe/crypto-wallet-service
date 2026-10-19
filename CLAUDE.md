@@ -21,6 +21,7 @@ Kind in CI).
 | Delivery | ArgoCD App-of-Apps (`k8s/root-app.yaml` → `k8s/apps/`) + one ApplicationSet | `k8s/apps/crypto-wallet-appset.yaml` |
 | Manifests | Kustomize (base in `k8s/components`, CI overlay in `k8s/overlays/ci`) | `k8s/` |
 | Policy | Kyverno (`require-resource-limits`, **Enforce** mode) | `k8s/apps/kyverno-policies/` |
+| Network isolation | NetworkPolicies, default-deny ingress in `crypto-wallet-app`; enforced by the VPC CNI add-on (`enableNetworkPolicy`) | `k8s/components/network-policies.yaml`, `terraform/infra/eks.tf` |
 | Messaging | Kafka (Bitnami chart) + kafka-exporter | `k8s/apps/kafka-app.yaml`, `k8s/apps/kafka/` |
 | Observability | kube-prometheus-stack (Prometheus + Grafana), dashboards as plain JSON | `k8s/apps/monitoring-app.yaml`, `k8s/apps/monitoring/` |
 | Ingress | ingress-nginx, `*.local` hosts via port-forward | `k8s/apps/ingress/` |
@@ -85,6 +86,10 @@ Run the same checks CI runs (Section 4.1). All must pass:
 - **Every container outside `kube-system`, `argocd`, `kyverno` and `monitoring`
   must set `resources.limits.cpu` and `resources.limits.memory`.** Kyverno
   rejects the Pod otherwise. Set requests too.
+- `crypto-wallet-app` is **default-deny for ingress**. A new workload there,
+  or a new caller of an existing one, gets no traffic until you add a
+  matching allow rule to `k8s/components/network-policies.yaml`. Open one
+  hop at a time (source selector + port), never an allow-all.
 - Pin images to immutable tags, never `:latest`, for anything ArgoCD deploys.
   Don't hand-edit the ECR image tags in `k8s/components/{wallet-service,order-service,frontend}.yaml`;
   `ci.yml` owns them.
@@ -97,6 +102,21 @@ Run the same checks CI runs (Section 4.1). All must pass:
   ConfigMap.
 - Match the existing comment style: explain **why** a non-obvious setting
   exists (sync waves, ignoreDifferences, patches), next to the setting.
+
+### Keep docs in sync (same PR)
+- Before opening a PR, grep README.md, architecture.md and CLAUDE.md for
+  what you changed (file paths, component names, make targets, namespaces,
+  ports, Vault roles/stores) and update any statement that is no longer true.
+  Do this for every change, however small.
+- Adding or removing a component: also update the README tech-stack table,
+  the CLAUDE.md overview table and the relevant architecture.md diagram.
+- Closing a gap listed in architecture.md's production-hardening roadmap:
+  update or remove that row.
+- Prefer describing structure and linking to the source file over copying
+  volatile details (chart versions, replica counts, image tags) into docs.
+- State the result in the PR body: which docs were updated, or
+  "Docs: no changes needed".
+- Exempt: `ci.yml`'s automated `chore/pin-images-<sha>` PRs.
 
 ### Live-cluster validation, when a change needs it
 For sizing, autoscaling, probes and anything worth watching under real load,
@@ -143,7 +163,7 @@ Report this to the user rather than quietly working around it.
 - The only supported pattern is **Vault → ESO**: store the value in Vault
   (`terraform/vault-config`, run via `make vault-init`), then reference it with
   an `ExternalSecret` against an existing `ClusterSecretStore`
-  (`vault-crypto-app`, `vault-monitoring`, `vault-backend`), or add a
+  (`vault-crypto-app`, `vault-monitoring`, `vault-argocd-repo`), or add a
   dedicated Vault role and store for a new consumer. See `k8s/components/external-secret.yaml` and
   `k8s/apps/grafana-secret.yaml`. The repo uses no Sealed Secrets and no
   plain `Secret` objects, apart from the throwaway CI fixture
@@ -173,7 +193,8 @@ Report this to the user rather than quietly working around it.
   deletion (Postgres data).
 - Don't weaken guardrails to make something pass: no exempting namespaces in
   the Kyverno policy, no switching it to `Audit`, no disabling PR-check jobs,
-  no relaxing `.yamllint.yml` just to get a file through.
+  no relaxing `.yamllint.yml` just to get a file through, no allow-all or
+  namespace-wide NetworkPolicy to get traffic flowing.
 - Don't run high-load k6 scenarios (`spike-test.js`,
   `kafka-pipeline-stress.js`) against the live cluster unless the user asks.
 
@@ -290,6 +311,7 @@ kubectl get pods -A | grep -v -E 'Running|Completed'
 kubectl get hpa -n crypto-wallet-app
 kubectl get externalsecrets -A                 # SecretSynced should be True
 kubectl get clusterpolicy                       # Kyverno policies Ready
+kubectl get networkpolicy -n crypto-wallet-app  # default-deny + 3 allow rules
 kubectl get events -A --field-selector reason=PolicyViolation
 ```
 
@@ -301,5 +323,7 @@ kubectl get events -A --field-selector reason=PolicyViolation
 - [ ] yamllint, kustomize build, kubeconform (and helm-values check if relevant) pass locally.
 - [ ] New manifests are listed in their `kustomization.yaml`; containers have CPU/memory limits.
 - [ ] No secrets or credentials in the diff.
+- [ ] README.md / architecture.md / CLAUDE.md checked against the change; the PR body says
+      what was updated or "Docs: no changes needed".
 - [ ] Every test resource, port-forward and paused `selfHeal` has been cleaned up or restored.
 - [ ] Branch pushed and PR opened with `gh pr create`, with a validation summary in the body.

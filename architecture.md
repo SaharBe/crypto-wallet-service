@@ -12,7 +12,7 @@ setup instructions, see [README.md](README.md).
 - [3. Infrastructure layer: AWS EKS via Terraform](#3-infrastructure-layer-aws-eks-via-terraform)
 - [4. Delivery layer: ArgoCD GitOps](#4-delivery-layer-argocd-gitops)
 - [5. Secrets layer: Vault + External Secrets Operator](#5-secrets-layer-vault--external-secrets-operator)
-- [6. Policy layer: Kyverno](#6-policy-layer-kyverno)
+- [6. Policy layer: Kyverno and NetworkPolicies](#6-policy-layer-kyverno-and-networkpolicies)
 - [7. Observability layer: Prometheus + Grafana](#7-observability-layer-prometheus--grafana)
 - [8. Application layer: event-driven wallet](#8-application-layer-event-driven-wallet)
 - [9. CI/CD pipeline and automated image pinning](#9-cicd-pipeline-and-automated-image-pinning)
@@ -25,6 +25,7 @@ setup instructions, see [README.md](README.md).
 | **Git is the only source of truth** | ArgoCD runs with `automated: { prune: true, selfHeal: true }` on every Application. Any change made with `kubectl edit` gets reverted. |
 | **No secrets in git** | Vault holds secret values. ESO materializes them as Kubernetes Secrets at runtime. Only `.example` templates are tracked. |
 | **Guardrails at admission, not in review** | Kyverno rejects non-compliant Pods (Enforce mode). The PR gate validates every manifest against real CRD schemas. |
+| **Least privilege on the network** | The app namespace is default-deny for ingress. Each NetworkPolicy opens one hop of the real request path, and the VPC CNI enforces it. |
 | **Immutable, traceable releases** | Images are pinned to commit SHAs by CI. A rollback is a `git revert`. |
 | **Everything as code** | Terraform (infra + Vault config), Kustomize/Helm values (workloads), JSON (Grafana dashboards), k6 scripts (performance SLOs). |
 
@@ -80,7 +81,7 @@ lifecycle.
 | Root module | Provisions | State |
 |---|---|---|
 | `terraform/state-backend` | S3 bucket (versioned, SSE-encrypted, public access blocked) and DynamoDB lock table | Local (bootstrap chicken-and-egg) |
-| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.31** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push), **EBS CSI driver** as an EKS add-on with an IRSA role | S3 remote backend |
+| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.31** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push), **EBS CSI driver** as an EKS add-on with an IRSA role, **VPC CNI** as a managed EKS add-on with `enableNetworkPolicy: "true"` | S3 remote backend |
 | `terraform/vault-config` | Vault Kubernetes auth backend, KV v2 mount, and one **policy + role + secret** per consumer through `terraform/modules/vault-config` | S3 remote backend |
 
 The `gp3` StorageClass (`k8s/apps/ebs-storageclass.yaml`) is backed by the
@@ -173,7 +174,9 @@ through `make vault-init`. No secret value appears in any tracked file. The
 Vault Agent injector is disabled, so ESO is the only delivery path and no
 mutating webhook needs managing.
 
-## 6. Policy layer: Kyverno
+## 6. Policy layer: Kyverno and NetworkPolicies
+
+### Admission: Kyverno
 
 `k8s/apps/kyverno-policies/disallow-missing-limits.yaml` defines the
 `require-resource-limits` ClusterPolicy:
@@ -190,6 +193,42 @@ its neighbours, so this policy is what makes the HPA capacity planning
 valid. The policies live in their own Application at wave 1 so they apply
 only after Kyverno's CRDs exist, and the policy is checked against
 Kyverno's CRD schema on every PR.
+
+### Network: default-deny ingress
+
+`k8s/components/network-policies.yaml` makes `crypto-wallet-app`
+default-deny for ingress, then opens only the hops the request path uses:
+
+```mermaid
+flowchart LR
+    NG["ingress-nginx controller<br/>(ns ingress-nginx)"] -->|":8080"| FE["frontend"]
+    K6["k6 Pod<br/>app: k6-load-generator"] -.->|":8080"| FE
+    FE -->|":3000"| WS["wallet-service"]
+    FE -->|":3000"| OS["order-service"]
+    WS -->|":5432"| PG["postgres"]
+    OS -->|":5432"| PG
+```
+
+| Policy | Selects | Allows from |
+|---|---|---|
+| `default-deny-ingress` | every Pod | nothing |
+| `allow-ingress-nginx-to-frontend` | `app: frontend` | ingress-nginx controller Pods in the `ingress-nginx` namespace, plus the in-cluster k6 Pod (`app: k6-load-generator`), on 8080 |
+| `allow-frontend-to-backends` | wallet-service, order-service | `app: frontend` on 3000 |
+| `allow-backends-to-postgres` | `app: postgres` | wallet-service and order-service on 5432 |
+
+- **Enforcement.** NetworkPolicies are only stored, not enforced, unless
+  the CNI implements them. `terraform/infra/eks.tf` brings the VPC CNI
+  under EKS add-on management with `enableNetworkPolicy: "true"`, which
+  runs the network policy agent on every node. The CI overlay
+  (`k8s/overlays/ci`) deploys the same four policies to Kind for the k6
+  job.
+- **Ingress only.** Egress stays open, so the services can reach Kafka in
+  its own namespace and CoreDNS without extra rules. Restricting egress is
+  on the [roadmap](#production-hardening-roadmap).
+- **Kubelet probes** come from the node rather than a Pod, and the CNI
+  allows them, so no probe rule is needed.
+- **New workloads** in `crypto-wallet-app` receive no traffic until a
+  matching allow rule is added to this file.
 
 ## 7. Observability layer: Prometheus + Grafana
 
@@ -312,4 +351,5 @@ simplicity. Each would change for a production deployment:
 | CI → AWS auth | Long-lived IAM access keys in GitHub secrets | GitHub OIDC → IAM role (no static credentials) |
 | Image supply chain | ECR scan on push | Tag immutability, image signing (cosign), Kyverno `verifyImages` |
 | Policy coverage | Resource limits | Plus: disallow privileged/root, require probes, restrict registries |
+| Network policies | Default-deny **ingress** in `crypto-wallet-app` only; egress open | Default-deny egress with explicit DNS/Kafka/Postgres rules; extend default-deny to platform namespaces |
 | Node networking | VPC-CNI without prefix delegation (17 pods/node) | Enable prefix delegation, or use larger/more nodes + Cluster Autoscaler/Karpenter |

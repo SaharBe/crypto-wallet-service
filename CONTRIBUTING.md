@@ -2,7 +2,7 @@
 
 ## Branch & PR workflow
 
-`main` is protected by convention: **no direct pushes.** Every change —
+`main` is protected by a branch ruleset: **no direct pushes.** Every change —
 manifests, Terraform, services, docs — lands through a feature branch and a
 Pull Request.
 
@@ -15,7 +15,12 @@ Pull Request.
    must branch, commit, push, and open a PR via `gh pr create` with a clear
    description and validation summary — never commit or push to `main`
    directly, automated or not.
-3. [PR Checks](.github/workflows/pr-checks.yml) runs automatically on open/
+3. Keep the docs in the same PR as the change. Before opening it, check
+   README.md, architecture.md and CLAUDE.md for statements about what you
+   changed (file paths, components, make targets, namespaces, ports) and
+   fix any that are no longer true. Say in the PR body what you updated, or
+   "Docs: no changes needed". CI's automated image-pin PRs are exempt.
+4. [PR Checks](.github/workflows/pr-checks.yml) runs automatically on open/
    update: YAML lint (files the PR touches), `kustomize build` across every
    `kustomization.yaml`, offline `kubeconform` schema validation of every
    rendered manifest, `helm template` of every ArgoCD Application's chart +
@@ -23,7 +28,7 @@ Pull Request.
    own service images to a throwaway Kind cluster and runs
    `tests/performance/load-test.js` through it. All must pass before
    merging.
-4. Every change to `main` arrives through a PR, which the "Protect main branche"
+5. Every change to `main` arrives through a PR, which the "Protect main branche"
    ruleset enforces. That includes [ci.yml](.github/workflows/ci.yml)'s
    `update-manifests` job: it pins Deployment image tags after a build by
    opening a `chore/pin-images-<sha>` PR and squash-merging it itself. That

@@ -35,7 +35,10 @@ no restarts, and latency that degrades but stays under 800ms.
 `K6_MODE=cluster` runs each script as an ephemeral `grafana/k6` Pod in
 `crypto-wallet-app`. The Pod hits the `frontend` Service directly, so no
 local port-forward sits in the latency path, and it pushes metrics to
-Prometheus via remote write. `run-in-cluster.sh` deletes the Pod and its
+Prometheus via remote write. The Pod carries the label
+`app: k6-load-generator`, which the namespace's default-deny NetworkPolicy
+needs in order to let it reach the frontend
+(`k8s/components/network-policies.yaml`). `run-in-cluster.sh` deletes the Pod and its
 `k6-scripts` ConfigMap when the run ends.
 
 1. **Prerequisites:** `kubectl` points at the EKS cluster

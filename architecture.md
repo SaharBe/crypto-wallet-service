@@ -160,14 +160,16 @@ flowchart LR
     end
 ```
 
-There is one Vault role and one `ClusterSecretStore` per consumer, and each
-role's policy grants read access only to that consumer's path:
+There is one Vault role and one `ClusterSecretStore` per consumer. Each
+role accepts a login only from the single ServiceAccount its store uses
+(`serviceAccountRef`), and its policy grants read access only to that
+consumer's path:
 
-| ClusterSecretStore | Vault role | Vault path | Target Secret |
-|---|---|---|---|
-| `vault-crypto-app` | `crypto-app-role` | `secret/crypto-db` | `crypto-db-secret` (crypto-wallet-app): Postgres credentials for `postgres-db` and `wallet-service` |
-| `vault-monitoring` | `monitoring-role` | `secret/monitoring/grafana` | `grafana-admin-credentials` (monitoring) |
-| `vault-argocd-repo` | `argocd-repo-role` | `secret/argocd-repo-creds` | `private-repo-creds` (argocd): ArgoCD's repository Secret |
+| ClusterSecretStore | Vault role | Bound ServiceAccount | Vault path | Target Secret |
+|---|---|---|---|---|
+| `vault-crypto-app` | `crypto-app-role` | `crypto-wallet-app/crypto-sa` | `secret/crypto-db` | `crypto-db-secret` (crypto-wallet-app): Postgres credentials for `postgres-db` and `wallet-service` |
+| `vault-monitoring` | `monitoring-role` | `monitoring/grafana-secrets-sa` | `secret/monitoring/grafana` | `grafana-admin-credentials` (monitoring) |
+| `vault-argocd-repo` | `argocd-repo-role` | `argocd/argocd-repo-reader` | `secret/argocd-repo-creds` | `private-repo-creds` (argocd): ArgoCD's repository Secret |
 
 Every value enters Vault from the operator's gitignored `secrets.env`
 through `make vault-init`. No secret value appears in any tracked file. The
@@ -344,7 +346,6 @@ simplicity. Each would change for a production deployment:
 | Area | Current (portfolio) | Production target |
 |---|---|---|
 | Vault | Dev mode: in-memory, auto-unsealed, root token. `make vault-init` re-seeds it after a restart | HA Raft storage, AWS KMS auto-unseal, no root-token use, short-lived auth |
-| Vault roles | `crypto-app-role` and `monitoring-role` bind any ServiceAccount (`*`) in their namespaces | Bind each role to the specific ServiceAccount used by its `ClusterSecretStore` |
 | Ingress | `ClusterIP` + `kubectl port-forward` | `LoadBalancer` (NLB) or AWS Load Balancer Controller, TLS via cert-manager, real DNS |
 | Kafka | Single KRaft node, PLAINTEXT | 3+ brokers, RF 3, TLS + SASL, or Amazon MSK |
 | PostgreSQL | Single in-cluster Pod on EBS | Amazon RDS (Multi-AZ) with automated backups |

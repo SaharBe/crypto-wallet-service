@@ -19,11 +19,14 @@ module "crypto_app" {
   source     = "../modules/vault-config"
   depends_on = [vault_kubernetes_auth_backend_config.this]
 
+  # Only the SA that ClusterSecretStore/vault-crypto-app logs in with
+  # (k8s/components/external-secret.yaml). A wildcard here let any Pod in
+  # these namespaces, argocd included, read the DB credentials (SEC-411).
   auth_backend                     = vault_auth_backend.kubernetes.path
   policy_name                      = "crypto-app-policy"
   role_name                        = "crypto-app-role"
-  bound_service_account_names      = ["*"]
-  bound_service_account_namespaces = ["crypto-wallet-app", "external-secrets", "argocd"]
+  bound_service_account_names      = ["crypto-sa"]
+  bound_service_account_namespaces = ["crypto-wallet-app"]
 
   # server.dev.enabled=true in the Vault Helm values already pre-mounts
   # "secret/" as KV v2 — creating it again here would error.
@@ -62,11 +65,14 @@ module "monitoring" {
   source     = "../modules/vault-config"
   depends_on = [vault_kubernetes_auth_backend_config.this]
 
+  # Only the SA that ClusterSecretStore/vault-monitoring logs in with
+  # (k8s/apps/grafana-secret.yaml). Previously any Pod in monitoring or
+  # crypto-wallet-app could read the Grafana admin password (SEC-411).
   auth_backend                     = vault_auth_backend.kubernetes.path
   policy_name                      = "monitoring-policy"
   role_name                        = "monitoring-role"
-  bound_service_account_names      = ["*"]
-  bound_service_account_namespaces = ["monitoring", "crypto-wallet-app"]
+  bound_service_account_names      = ["grafana-secrets-sa"]
+  bound_service_account_namespaces = ["monitoring"]
 
   manage_kv_mount = false
 

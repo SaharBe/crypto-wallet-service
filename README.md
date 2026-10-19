@@ -417,7 +417,9 @@ known cluster-sizing limit, not a bug in the autoscaling config.
 - **No plaintext secrets in git.** Runtime credentials (Postgres, Grafana
   admin, ArgoCD's repo credential) live in Vault. ESO syncs them into
   Kubernetes Secrets through `ClusterSecretStore`s, each bound to its own
-  narrowly scoped Vault role and policy.
+  narrowly scoped Vault role and policy. Each role accepts only the one
+  ServiceAccount its store logs in with, so no other Pod can read those
+  secrets.
 - **Gitignored local inputs.** `secrets.env`, `.env`, `*.tfvars`,
   `backend.hcl`, Terraform state and the bootstrap repo Secret are all
   ignored. Only `.example` templates are tracked.

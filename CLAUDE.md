@@ -148,6 +148,10 @@ Report this to the user rather than quietly working around it.
   `k8s/apps/grafana-secret.yaml`. The repo uses no Sealed Secrets and no
   plain `Secret` objects, apart from the throwaway CI fixture
   `k8s/overlays/ci/ci-db-secret.yaml`.
+- Every Vault Kubernetes-auth role binds **exactly** the ServiceAccount and
+  namespace its `ClusterSecretStore` logs in with (`serviceAccountRef`).
+  Never use `"*"` for `bound_service_account_names` or add namespaces that
+  don't need access.
 - Never commit `secrets.env`, `k8s/bootstrap-secrets/repo-secret.yaml`,
   `terraform.tfvars`, `backend.hcl` or any `*.tfstate`. Only the `.example`
   files belong in git.

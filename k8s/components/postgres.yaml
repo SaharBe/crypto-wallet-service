@@ -52,10 +52,22 @@ spec:
               cpu: "500m"
               memory: "512Mi"
           env:
+            # Same Vault-backed Secret wallet-service reads (ExternalSecret in
+            # external-secret.yaml; CI swaps in ci-db-secret.yaml), so the DB
+            # and its clients can't drift apart and no credential sits in git
+            # (SEC-412). Postgres only reads these on initdb of an empty
+            # PGDATA: changing the value in Vault does NOT change the password
+            # of an existing database; that needs an ALTER USER as well.
             - name: POSTGRES_USER
-              value: "myuser"
+              valueFrom:
+                secretKeyRef:
+                  name: crypto-db-secret
+                  key: DB_USER
             - name: POSTGRES_PASSWORD
-              value: "mypassword"
+              valueFrom:
+                secretKeyRef:
+                  name: crypto-db-secret
+                  key: DB_PASSWORD
             - name: POSTGRES_DB
               value: "mydb"
             # Subdirectory, not the mount point itself: a freshly provisioned

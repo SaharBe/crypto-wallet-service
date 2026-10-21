@@ -208,7 +208,6 @@ flowchart LR
     FE -->|":3000"| WS["wallet-service"]
     FE -->|":3000"| OS["order-service"]
     WS -->|":5432"| PG["postgres"]
-    OS -->|":5432"| PG
 ```
 
 | Policy | Selects | Allows from |
@@ -216,7 +215,7 @@ flowchart LR
 | `default-deny-ingress` | every Pod | nothing |
 | `allow-ingress-nginx-to-frontend` | `app: frontend` | ingress-nginx controller Pods in the `ingress-nginx` namespace, plus the in-cluster k6 Pod (`app: k6-load-generator`), on 8080 |
 | `allow-frontend-to-backends` | wallet-service, order-service | `app: frontend` on 3000 |
-| `allow-backends-to-postgres` | `app: postgres` | wallet-service and order-service on 5432 |
+| `allow-wallet-service-to-postgres` | `app: postgres` | `app: wallet-service` on 5432 (order-service has no DB access) |
 
 - **Enforcement.** NetworkPolicies are only stored, not enforced, unless
   the CNI implements them. `terraform/infra/eks.tf` brings the VPC CNI

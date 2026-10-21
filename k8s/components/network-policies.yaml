@@ -2,8 +2,8 @@
 # Pod in the namespace starts closed (default-deny below), then each policy
 # opens exactly one hop of the real request path:
 #
-#   ingress-nginx --8080--> frontend --3000--> wallet-service / order-service
-#                                                       --5432--> postgres
+#   ingress-nginx --8080--> frontend --3000--> wallet-service --5432--> postgres
+#                                     \--3000--> order-service (Kafka producer only)
 #
 # Egress is deliberately left open. The services' outbound connections to
 # Kafka (kafka.kafka.svc:9092, its own namespace), CoreDNS and Postgres are
@@ -94,11 +94,13 @@ spec:
           port: 3000
 ---
 # Postgres (postgres.yaml, Pod label `app: postgres`) only accepts
-# connections from the two backends.
+# connections from wallet-service, the only DB client. order-service just
+# produces to Kafka (no Postgres client in services/order-service), so it
+# is deliberately left out (SEC-413).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-backends-to-postgres
+  name: allow-wallet-service-to-postgres
   namespace: crypto-wallet-app
 spec:
   podSelector:
@@ -109,12 +111,8 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchExpressions:
-              - key: app
-                operator: In
-                values:
-                  - wallet-service
-                  - order-service
+            matchLabels:
+              app: wallet-service
       ports:
         - protocol: TCP
           port: 5432

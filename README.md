@@ -430,8 +430,8 @@ known cluster-sizing limit, not a bug in the autoscaling config.
   `kubeconform` and `helm template` check runs on each PR.
 - **Network isolation.** `crypto-wallet-app` is default-deny for ingress
   (`k8s/components/network-policies.yaml`). Only these hops are allowed:
-  ingress-nginx → frontend, frontend → wallet/order-service, and the
-  backends → Postgres (plus the in-cluster k6 Pod → frontend). The EKS
+  ingress-nginx → frontend, frontend → wallet/order-service, and
+  wallet-service → Postgres (plus the in-cluster k6 Pod → frontend). The EKS
   VPC CNI add-on runs with `enableNetworkPolicy` (`terraform/infra/eks.tf`),
   so the policies are enforced and not just stored.
 - **Protected `main`.** Every change goes through a PR, including CI's

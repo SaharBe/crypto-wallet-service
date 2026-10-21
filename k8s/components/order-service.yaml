@@ -35,16 +35,8 @@ spec:
         # Stable Service DNS, not a specific pod ordinal — see wallet-service.yaml.
         - name: KAFKA_BROKERS
           value: "kafka.kafka.svc.cluster.local:9092"
-        - name: DB_USER
-          valueFrom:
-            secretKeyRef:
-              name: crypto-db-secret
-              key: DB_USER
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: crypto-db-secret
-              key: DB_PASSWORD
+        # No DB_* vars: order-service never talks to Postgres, so it doesn't
+        # get crypto-db-secret either (SEC-413).
 
         livenessProbe:
           httpGet:

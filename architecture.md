@@ -353,3 +353,5 @@ simplicity. Each would change for a production deployment:
 | Policy coverage | Resource limits | Plus: disallow privileged/root, require probes, restrict registries |
 | Network policies | Default-deny **ingress** in `crypto-wallet-app` only; egress open | Default-deny egress with explicit DNS/Kafka/Postgres rules; extend default-deny to platform namespaces |
 | Node networking | VPC-CNI without prefix delegation (17 pods/node) | Enable prefix delegation, or use larger/more nodes + Cluster Autoscaler/Karpenter |
+| Graceful shutdown | `node` runs as PID 1 with no SIGTERM handler, so pods are SIGKILLed after the 30 s grace period ([Resilience Experiments](README.md#resilience-experiments)) | SIGTERM handler that drains HTTP and disconnects Kafka clients, or an init (`tini`) |
+| Kafka consumer delivery | DB errors in `eachMessage` are logged and the offset is committed, so orders are lost during a Postgres outage (PLAT-506) | Rethrow transient errors for re-delivery, DLQ for poison messages, idempotent balance updates |

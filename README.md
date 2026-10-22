@@ -49,6 +49,7 @@ everything around it.
 - [Operations & Makefile Commands](#operations--makefile-commands)
 - [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
+- [Resilience Experiments](#resilience-experiments)
 - [Security Model](#security-model)
 - [Development & Contributing Workflow](#development--contributing-workflow)
 
@@ -411,6 +412,115 @@ The three k6 scripts test the system from different angles:
 delegation. If every HPA scales toward `maxReplicas` at once, some pods
 stay `Pending` ("Too many pods") before CPU or memory runs out. This is a
 known cluster-sizing limit, not a bug in the autoscaling config.
+
+## Resilience Experiments
+
+Manual chaos experiments run against the live EKS cluster on 2026-10-22
+(PLAT-501). No chaos tool was installed. LitmusChaos or Chaos Mesh would
+add CRDs and pods to a cluster that is already close to the 17 pods/node
+ceiling. Each failure was injected with plain `kubectl`. Recovery was
+measured from a pod watch, ArgoCD's `operationState`, in-cluster probes
+and the **"Crypto Wallet - Performance & Load"** Grafana dashboard. Times
+below are UTC. The Grafana screenshots show local time (UTC+3).
+
+| # | What was broken | Expected | Observed | Recovery |
+|---|---|---|---|---|
+| 1 | Deleted a `wallet-service` pod, then the only `order-service` pod, during k6 `load-test.js` (up to 100 VUs) | ReplicaSet replaces the pod; short error burst at most | **0 failed requests** out of 16,793 | Replacement Ready in ~10 s |
+| 2 | Deleted the `order-service` Service; changed `order-service`'s memory limit with a live patch | ArgoCD `selfHeal` restores git state | Both reverted by an automated sync | ~3 s each |
+| 3 | Deleted the Postgres pod (single instance, no failover) | Short outage, PVC data survives, clients reconnect | Data intact, clients reconnected, **but 8 orders lost** (see findings) | ~2 s DB downtime |
+| 4 | Scaled `wallet-service` (the Kafka consumer) to 0, produced orders, scaled back | Lag builds, then drains with no loss | 284 orders queued, all 284 applied | Lag drained ~4 s after the pod was Ready |
+
+### 1. Pod kill under load
+
+`make test-load K6_MODE=cluster` (testid `k6-load-test-1792673765`). The
+HPA had scaled `wallet-service` to 2. `order-service` was at 1.
+
+- `wallet-service` pod deleted at 12:58:43. Replacement Ready at 12:58:55.
+- `order-service` pod deleted at 13:00:13. Replacement Ready at 13:00:24.
+- k6: `http_req_failed` 0.00%, p95 12.8 ms, max 729 ms.
+  `order_processing_lag` p95 2.0 s, max 5.9 s. All thresholds passed.
+- Both deleted pods stayed `Terminating` for the full 30 s grace period
+  and ended in `Error`, because they were SIGKILLed. The services run
+  `node index.js` as PID 1 with no SIGTERM handler, so the signal is
+  ignored. That also explains the zero errors on the single-replica
+  `order-service`: the old process kept serving, and Kubernetes routes to
+  a terminating-but-serving endpoint when no ready one exists. It worked
+  here by accident. See the findings below.
+
+![HTTP failure rate during pod kills](docs/images/resilience/pod-kill-failure-rate.png)
+![HTTP request duration during pod kills](docs/images/resilience/pod-kill-latency.png)
+
+### 2. Config drift and ArgoCD selfHeal
+
+- `kubectl delete svc order-service`: ArgoCD recreated it at 14:37:38,
+  ~3 s later (`initiatedBy: automated`). The new Service gets a new
+  ClusterIP. The frontend's nginx re-resolves upstreams every 10 s
+  (`resolver ... valid=10s` in `services/frontend/nginx/default.conf.template`),
+  and an order POSTed through the frontend right afterwards was accepted.
+- `kubectl patch` of `order-service`'s `limits.memory` (384Mi → 300Mi):
+  reverted to 384Mi at 14:38:14, ~3 s later. The ReplicaSet created from
+  the drifted template was scaled back to 0.
+- `spec.replicas` is **not** reverted on the HPA-managed Deployments. It's
+  in the ApplicationSet's `ignoreDifferences`, which experiment 4 relies on.
+
+### 3. Postgres restart
+
+- Round 1: the old pod shut down cleanly at 14:39:06. The new pod logged
+  `ready to accept connections` at 14:39:07.96. It was rescheduled onto
+  the same node, so the EBS volume didn't need to re-attach. The
+  wallet API's DB health check (`GET /api/wallet/`) returned 500 for two
+  1-second probes, then recovered without a restart because `pg.Pool`
+  reconnects. All 5,361 existing `wallets` rows survived.
+- Round 2: a steady order stream for one user (~5 orders/s for 30 s), with
+  the pod deleted mid-stream. `order-service` accepted **140** orders but
+  only **132** were applied. `wallet-group` lag was 0 afterwards, so the
+  8 orders will never be retried. They match the 8
+  `Failed to parse or process message: connect ECONNREFUSED` lines that
+  wallet-service logged during the ~2 s outage.
+- Not tested: a reschedule to a different node (node drain or failure).
+  That adds the EBS detach/attach time, and the volume is pinned to one AZ.
+
+### 4. Kafka consumer down
+
+- `kubectl scale deploy wallet-service --replicas=0` at 14:43:15. The pod
+  was gone at 14:43:37.
+- 284 orders were POSTed through the frontend between 14:43:38 and
+  14:44:39, with 0 failures, because `order-service` doesn't depend on the
+  consumer. The wallet API returned 502 for the whole outage, because
+  the consumer and the API share one process.
+- With 0 replicas the HPA reports `ScalingActive=False (ScalingDisabled)`.
+  ArgoCD ignores `spec.replicas`, so **nothing brings the consumer back on
+  its own**. It took a manual `--replicas=1` at 14:45:54.
+- The consumer rejoined `wallet-group` at 14:45:56. All 284 orders were in
+  `wallets` by 14:46:03. Lag returned to 0 and the HPA re-enabled itself.
+
+![Consumer group lag](docs/images/resilience/kafka-consumer-lag.png)
+![Produce vs consume rate](docs/images/resilience/kafka-produce-vs-consume.png)
+![Ready pods during the consumer outage](docs/images/resilience/kafka-ready-pods.png)
+
+### Findings and follow-ups
+
+1. **Orders are lost when Postgres is unavailable (PLAT-506).**
+   `consumer.js` catches DB errors inside `eachMessage` and only logs
+   them, so the offset is committed anyway. DB errors should be rethrown
+   so KafkaJS re-delivers the message. That also needs an idempotency
+   decision, because the UPSERT adds to the balance.
+2. **No graceful shutdown.** `node` as PID 1 ignores SIGTERM, so every
+   rollout, scale-down and eviction waits 30 s and then SIGKILLs the
+   process. In-flight requests, the Kafka producer and the consumer are
+   cut off. Handle SIGTERM (close the HTTP server, disconnect
+   producer/consumer), or run under an init such as `tini`.
+3. **A consumer scaled to 0 stays at 0.** Neither the HPA nor ArgoCD
+   restores it. Alert on `kube_deployment_status_replicas_available == 0`,
+   or split the consumer into its own Deployment so that losing it
+   doesn't also take down the wallet API.
+4. **Postgres has no readinessProbe**, so the pod shows Ready before the
+   database accepts connections. The ~2 s window here was too short to
+   matter.
+
+All test resources were removed afterwards (k6 Pod/ConfigMap,
+port-forwards, probe loops). `selfHeal` was never paused, because none of
+the experiments needed it.
 
 ## Security Model
 

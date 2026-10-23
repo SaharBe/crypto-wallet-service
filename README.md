@@ -51,6 +51,7 @@ everything around it.
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
 - [Resilience Experiments](#resilience-experiments)
 - [Security Model](#security-model)
+- [Known Limitations & Hardening Roadmap](#known-limitations--hardening-roadmap)
 - [Development & Contributing Workflow](#development--contributing-workflow)
 
 ## Architecture at a Glance
@@ -549,9 +550,30 @@ the experiments needed it.
 
 Some settings were chosen for a demo environment and would change in
 production: Vault runs in dev mode, ingress is reached over a
-port-forward, Kafka uses PLAINTEXT, and egress is not yet restricted. The
-[production-hardening section in architecture.md](architecture.md#production-hardening-roadmap)
-lists them.
+port-forward, Kafka uses PLAINTEXT, and egress is not yet restricted. See
+[Known Limitations & Hardening Roadmap](#known-limitations--hardening-roadmap).
+
+## Known Limitations & Hardening Roadmap
+
+These gaps are deliberate, not oversights. The cluster is 3× `t3.medium`
+with a hard ceiling of 17 pods per node (VPC-CNI IP limit), so every
+stateful component runs as a single instance. Effort went into GitOps,
+policy and observability instead. Each gap below is listed with why it was
+deferred and how it would be closed. The full production-vs-portfolio
+table, including Kafka, CI auth and supply chain, is in
+[architecture.md](architecture.md#production-hardening-roadmap).
+
+| Gap | Today | Why deferred | Production path |
+|---|---|---|---|
+| **Postgres HA** | Single-replica Deployment on one gp3 PVC (`k8s/components/postgres.yaml`). No failover, no backups. A pod restart costs ~2 s; a node or AZ loss means an EBS re-attach or an outage | Capacity and cost: an operator plus 2 more instances and PVCs | [CloudNativePG](https://cloudnative-pg.io/) `Cluster` with 1 primary and 2 replicas spread across AZs. Apps use the `-rw` Service, which follows the primary on failover. Barman Cloud WAL archiving and scheduled base backups go to S3 through IRSA (PITR). The `bootstrap.initdb.secret` stays Vault → ESO. Amazon RDS Multi-AZ is the managed alternative |
+| **Vault dev mode** | `server.dev.enabled: true` (`k8s/apps/vault.yaml`): in-memory storage, auto-unsealed, root token. `make vault-init` re-seeds it from `terraform/vault-config` after a restart | Simplicity. No init/unseal ceremony and no key custody, and all config is Terraform, so a restart is one command | 3-replica HA with Raft integrated storage, `seal "awskms"` auto-unseal through IRSA, recovery keys held outside the cluster, root token revoked after bootstrap, TLS, audit device, Raft snapshots to S3 |
+| **TLS / HTTPS** | HTTP on `*.local` through `make ingress-forward`. ingress-nginx is `ClusterIP`; the Ingresses in `k8s/apps/ingress/` have no `tls:` block | Cost of an NLB and a domain. Exposing ArgoCD, Vault and Grafana publicly would widen the attack surface for no user benefit | Route53 hosted zone + ExternalDNS, ingress-nginx behind an NLB, cert-manager with a Let's Encrypt `ClusterIssuer` using DNS-01 on Route53 through IRSA. Admin UIs stay internal (internal NLB/VPN or SSO). Alternative: terminate TLS at the NLB with ACM |
+| **Distributed tracing** | Metrics only (Prometheus, kafka-exporter, k6 remote-write) | Metrics and alerts cover most of the value for two services, and every extra pod counts against the ceiling | PLAT-503: OpenTelemetry Node.js auto-instrumentation (HTTP, Express, pg), `traceparent` propagated in Kafka message headers, Jaeger (or Tempo) through ArgoCD with limits and a NetworkPolicy allow rule for OTLP |
+| **In-cluster AI agents** | AI-assisted ops runs outside the cluster with read-only access (PLAT-504/505) | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
+
+Gaps found by the [resilience experiments](#resilience-experiments) are
+tracked the same way: graceful shutdown (PLAT-507), order loss during a
+Postgres outage (PLAT-506) and a consumer stuck at zero replicas (PLAT-508).
 
 ## Development & Contributing Workflow
 

@@ -344,10 +344,10 @@ simplicity. Each would change for a production deployment:
 
 | Area | Current (portfolio) | Production target |
 |---|---|---|
-| Vault | Dev mode: in-memory, auto-unsealed, root token. `make vault-init` re-seeds it after a restart | HA Raft storage, AWS KMS auto-unseal, no root-token use, short-lived auth |
-| Ingress | `ClusterIP` + `kubectl port-forward` | `LoadBalancer` (NLB) or AWS Load Balancer Controller, TLS via cert-manager, real DNS |
+| Vault | Dev mode: in-memory, auto-unsealed, root token. `make vault-init` re-seeds it after a restart | 3-replica HA Raft storage, AWS KMS auto-unseal (IRSA), root token revoked, TLS + audit device, Raft snapshots to S3 |
+| Ingress / TLS | `ClusterIP` + `kubectl port-forward`, HTTP on `*.local` | NLB, Route53 + ExternalDNS, cert-manager (Let's Encrypt, DNS-01 via IRSA) or ACM at the NLB; admin UIs internal-only |
 | Kafka | Single KRaft node, PLAINTEXT | 3+ brokers, RF 3, TLS + SASL, or Amazon MSK |
-| PostgreSQL | Single in-cluster Pod on EBS | Amazon RDS (Multi-AZ) with automated backups |
+| PostgreSQL | Single in-cluster Pod on EBS, no backups | CloudNativePG (1 primary + 2 replicas across AZs, S3 WAL archiving / PITR), or Amazon RDS Multi-AZ |
 | CI → AWS auth | Long-lived IAM access keys in GitHub secrets | GitHub OIDC → IAM role (no static credentials) |
 | Image supply chain | ECR scan on push | Tag immutability, image signing (cosign), Kyverno `verifyImages` |
 | Policy coverage | Resource limits | Plus: disallow privileged/root, require probes, restrict registries |
@@ -355,3 +355,5 @@ simplicity. Each would change for a production deployment:
 | Node networking | VPC-CNI without prefix delegation (17 pods/node) | Enable prefix delegation, or use larger/more nodes + Cluster Autoscaler/Karpenter |
 | Graceful shutdown | `node` runs as PID 1 with no SIGTERM handler, so pods are SIGKILLed after the 30 s grace period ([Resilience Experiments](README.md#resilience-experiments)) | SIGTERM handler that drains HTTP and disconnects Kafka clients, or an init (`tini`) |
 | Kafka consumer delivery | DB errors in `eachMessage` are logged and the offset is committed, so orders are lost during a Postgres outage (PLAT-506) | Rethrow transient errors for re-delivery, DLQ for poison messages, idempotent balance updates |
+| Tracing | Metrics only | OpenTelemetry auto-instrumentation, trace context in Kafka headers, Jaeger/Tempo (PLAT-503) |
+| AI-assisted ops | Out-of-cluster, read-only (PLAT-504/505) | kagent `Agent` CRDs via ArgoCD, LLM key via Vault → ESO, read-only RBAC, PR-only changes |

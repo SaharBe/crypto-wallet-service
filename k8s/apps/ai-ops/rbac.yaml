@@ -1,0 +1,94 @@
+# Read-only identity for AI-assisted operations (PLAT-504): Radar runs on
+# the operator's laptop with a kubeconfig holding ONLY this ServiceAccount's
+# short-lived token (`make ai-kubeconfig`), and Claude Code reaches the
+# cluster through Radar's read-only MCP endpoint.
+#
+# This RBAC is the actual guardrail. Radar's --mcp-read-only only hides
+# write tools from MCP clients; it doesn't restrict Radar's own UI or REST
+# API. Whatever Radar (or the agent behind it) tries, the API server only
+# allows what this ClusterRole grants.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-ops
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-readonly
+  namespace: ai-ops
+---
+# get/list/watch only. Deliberately NOT granted:
+#   - secrets: RBAC has no "deny", so the core group is an explicit list
+#     instead of "*" (which would include secrets).
+#   - pods/exec, pods/attach, pods/portforward, services/proxy, nodes/proxy:
+#     not writes, but each one lets the caller run code or reach workloads.
+#   - generators.external-secrets.io, certificates.k8s.io, coordination.k8s.io,
+#     flowcontrol.apiserver.k8s.io: not needed for diagnosis.
+# The other groups use "*" because none of their resources hold secret data.
+# A CRD that does would need to be excluded here before it's installed.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-readonly
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - limitranges
+      - namespaces
+      - nodes
+      - persistentvolumeclaims
+      - persistentvolumes
+      - pods
+      - pods/log
+      - podtemplates
+      - replicationcontrollers
+      - resourcequotas
+      - serviceaccounts
+      - services
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+      # Kubernetes built-ins
+      - admissionregistration.k8s.io
+      - apiextensions.k8s.io
+      - apiregistration.k8s.io
+      - apps
+      - autoscaling
+      - batch
+      - discovery.k8s.io
+      - events.k8s.io
+      - metrics.k8s.io
+      - networking.k8s.io
+      - node.k8s.io
+      - policy
+      - rbac.authorization.k8s.io
+      - scheduling.k8s.io
+      - storage.k8s.io
+      # Platform CRDs (ArgoCD, ESO, Kyverno, Prometheus Operator, VPC CNI)
+      - argoproj.io
+      - external-secrets.io
+      - kyverno.io
+      - reports.kyverno.io
+      - wgpolicyk8s.io
+      - monitoring.coreos.com
+      - networking.k8s.aws
+      - vpcresources.k8s.aws
+      - crd.k8s.amazonaws.com
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ai-readonly
+subjects:
+  - kind: ServiceAccount
+    name: ai-readonly
+    namespace: ai-ops

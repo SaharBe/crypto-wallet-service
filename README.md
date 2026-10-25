@@ -501,11 +501,17 @@ HPA had scaled `wallet-service` to 2. `order-service` was at 1.
 
 ### Findings and follow-ups
 
-1. **Orders are lost when Postgres is unavailable (PLAT-506).**
-   `consumer.js` catches DB errors inside `eachMessage` and only logs
-   them, so the offset is committed anyway. DB errors should be rethrown
-   so KafkaJS re-delivers the message. That also needs an idempotency
-   decision, because the UPSERT adds to the balance.
+1. **Orders were lost when Postgres was unavailable (PLAT-506, fixed).**
+   `consumer.js` used to catch DB errors inside `eachMessage` and only log
+   them, so the offset was committed anyway. A transient DB error is now
+   retried in place (capped backoff, heartbeat between attempts), and the
+   offset is committed only once the order is applied. Messages that can
+   never be applied (malformed, failed validation, Postgres data errors)
+   are skipped with a log line. Verified locally against a 60 s Postgres
+   outage: every order applied and lag drained to 0. Remaining tradeoff:
+   delivery is at-least-once and the UPSERT adds to the balance, so a
+   re-delivery can apply an order twice (PLAT-510). Skipped messages go
+   to logs only, with no DLQ yet (PLAT-511).
 2. **No graceful shutdown.** `node` as PID 1 ignores SIGTERM, so every
    rollout, scale-down and eviction waits 30 s and then SIGKILLs the
    process. In-flight requests, the Kafka producer and the consumer are
@@ -572,8 +578,10 @@ table, including Kafka, CI auth and supply chain, is in
 | **In-cluster AI agents** | AI-assisted ops runs outside the cluster with read-only access (PLAT-504/505) | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
 
 Gaps found by the [resilience experiments](#resilience-experiments) are
-tracked the same way: graceful shutdown (PLAT-507), order loss during a
-Postgres outage (PLAT-506) and a consumer stuck at zero replicas (PLAT-508).
+tracked the same way: graceful shutdown (PLAT-507), a consumer stuck at
+zero replicas (PLAT-508), idempotent wallet updates (PLAT-510) and a DLQ
+with declarative topic provisioning (PLAT-511). Order loss during a
+Postgres outage (PLAT-506) is fixed.
 
 ## Development & Contributing Workflow
 

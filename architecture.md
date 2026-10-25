@@ -16,7 +16,8 @@ setup instructions, see [README.md](README.md).
 - [7. Observability layer: Prometheus + Grafana](#7-observability-layer-prometheus--grafana)
 - [8. Application layer: event-driven wallet](#8-application-layer-event-driven-wallet)
 - [9. CI/CD pipeline and automated image pinning](#9-cicd-pipeline-and-automated-image-pinning)
-- [10. Production-hardening roadmap](#production-hardening-roadmap)
+- [10. AI-assisted operations: read-only agent access](#10-ai-assisted-operations-read-only-agent-access)
+- [11. Production-hardening roadmap](#production-hardening-roadmap)
 
 ## 1. Design principles
 
@@ -336,8 +337,47 @@ PR's own images on a Kind cluster, deploys them through
 `p95 < 200ms` and `< 1%` errors. Performance regressions are caught before
 merge, not after deployment.
 
+## 10. AI-assisted operations: read-only agent access
+
+Claude Code diagnoses the cluster through Radar's MCP server instead of raw
+`kubectl` (PLAT-504). Radar runs on the operator's laptop, so the only
+in-cluster footprint is RBAC: `k8s/apps/ai-ops/rbac.yaml`, synced by the
+`ai-ops` element of the ApplicationSet.
+
+```mermaid
+flowchart LR
+    subgraph Laptop["Operator laptop"]
+        CC["Claude Code"] -->|"MCP: /mcp-readonly"| R["Radar :9280<br/>--mcp-read-only"]
+        KC["ai-readonly.kubeconfig<br/>1 context, 8h token"] --- R
+    end
+    R -->|"bearer token"| API["EKS API server"]
+    subgraph Cluster["EKS"]
+        API --> RBAC{"ClusterRole ai-readonly<br/>get/list/watch"}
+        RBAC -->|"allowed"| RO["workloads, events, logs,<br/>CRDs (Argo, ESO, Kyverno, ...)"]
+        RBAC -.->|"forbidden"| NO["secrets, writes,<br/>exec / port-forward / proxy"]
+    end
+```
+
+- **RBAC is the boundary, not Radar.** `--mcp-read-only` filters MCP
+  tools, but Radar's UI and REST API can still issue writes. The API server
+  rejects them whatever path they take, because the identity can't write.
+- **No wildcard on the core group.** RBAC has no deny rule, so `""` lists
+  its resources explicitly and leaves out `secrets`. Other API groups use
+  `"*"` because none of their resources hold secret data. A CRD that does
+  must be excluded before it's installed.
+- **One-context kubeconfig.** Radar can switch between the contexts of its
+  kubeconfig, so `scripts/ai-kubeconfig.sh` writes a file containing only
+  the read-only context. The token comes from `kubectl create token`
+  (short-lived), not a long-lived ServiceAccount token Secret, so the
+  "no plain `Secret` objects" rule holds.
+- **Changes still go through git.** The agent proposes fixes; they land as
+  PRs and ArgoCD applies them, so there's an audit trail.
+
+Evidence (both demo diagnoses and every guardrail check) is in
+[docs/ai-assisted-ops-demo.md](docs/ai-assisted-ops-demo.md).
+
 <a id="production-hardening-roadmap"></a>
-## 10. Production-hardening roadmap
+## 11. Production-hardening roadmap
 
 Some settings in this environment were chosen deliberately for cost or
 simplicity. Each would change for a production deployment:
@@ -356,4 +396,4 @@ simplicity. Each would change for a production deployment:
 | Graceful shutdown | `node` runs as PID 1 with no SIGTERM handler, so pods are SIGKILLed after the 30 s grace period ([Resilience Experiments](README.md#resilience-experiments)) | SIGTERM handler that drains HTTP and disconnects Kafka clients, or an init (`tini`) |
 | Kafka consumer delivery | At-least-once: transient DB errors are retried in place and the offset is committed only after the order is applied (PLAT-506). Unprocessable messages are skipped with a log line. The topic is created at runtime by `wallet-service` | Idempotent balance updates keyed by an order id (PLAT-510); topics declared in git plus a DLQ for skipped messages (PLAT-511) |
 | Tracing | Metrics only | OpenTelemetry auto-instrumentation, trace context in Kafka headers, Jaeger/Tempo (PLAT-503) |
-| AI-assisted ops | Out-of-cluster, read-only (PLAT-504/505) | kagent `Agent` CRDs via ArgoCD, LLM key via Vault → ESO, read-only RBAC, PR-only changes |
+| AI-assisted ops | Out-of-cluster: Claude Code → Radar MCP with a read-only ServiceAccount (PLAT-504); triage skills (PLAT-505) | kagent `Agent` CRDs via ArgoCD, LLM key via Vault → ESO, read-only RBAC, PR-only changes |

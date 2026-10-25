@@ -42,7 +42,7 @@ LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +
 
 .DEFAULT_GOAL := help
 .PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password \
-	local-up local-down local-clean local-smoke local-logs
+	local-up local-down local-clean local-smoke local-logs ai-kubeconfig radar
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -71,6 +71,22 @@ ingress-forward: ## Port-forward the ingress-nginx controller to localhost:8080 
 	@echo "🔌 Forwarding svc/ingress-nginx-controller (ingress-nginx ns) -> http://localhost:8080"; \
 	echo "   Ctrl+C to stop. Browse: http://argocd.local:8080  http://grafana.local:8080  http://vault.local:8080  http://wallet.local:8080"; \
 	kubectl port-forward svc/ingress-nginx-controller -n ingress-nginx 8080:80
+
+# AI-assisted ops (PLAT-504): Radar on this laptop, connected through the
+# read-only ai-readonly ServiceAccount, never the operator's own context.
+# Claude Code reaches it via .mcp.json (http://localhost:9280/mcp-readonly).
+# The release binary is `kubectl-radar`; ~/.local/bin is checked as well,
+# since it isn't on every PATH.
+AI_KUBECONFIG ?= $(HOME)/.kube/ai-readonly.kubeconfig
+RADAR ?= $(shell command -v kubectl-radar 2>/dev/null || echo $(HOME)/.local/bin/kubectl-radar)
+
+ai-kubeconfig: ## Write a read-only kubeconfig for Radar (ai-readonly SA, short-lived token) to AI_KUBECONFIG
+	@AI_KUBECONFIG="$(AI_KUBECONFIG)" ./scripts/ai-kubeconfig.sh
+
+radar: ## Run Radar locally (read-only identity + read-only MCP) on :9280 — run `make ai-kubeconfig` first
+	@test -f "$(AI_KUBECONFIG)" || { echo "Missing $(AI_KUBECONFIG) — run 'make ai-kubeconfig' first"; exit 1; }
+	@test -x "$(RADAR)" || { echo "Radar not found — install it: https://github.com/skyhook-io/radar#installation"; exit 1; }
+	env -u KUBECONFIG "$(RADAR)" --kubeconfig "$(AI_KUBECONFIG)" --mcp-read-only $(RADAR_FLAGS)
 
 vault-init: ## Configure Vault (auth, policies, roles, secrets) via Terraform — safe to re-run
 	@$(LOAD_SECRETS); \

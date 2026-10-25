@@ -49,6 +49,11 @@ spec:
           - name: kafka-exporter
             path: k8s/apps/kafka
             namespace: kafka
+          # Read-only RBAC for AI-assisted ops (PLAT-504). Mostly
+          # cluster-scoped; `ai-ops` only holds the ServiceAccount.
+          - name: ai-ops
+            path: k8s/apps/ai-ops
+            namespace: ai-ops
   template:
     metadata:
       name: '{{ .name }}'

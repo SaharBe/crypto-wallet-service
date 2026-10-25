@@ -83,9 +83,9 @@ RADAR ?= $(shell command -v kubectl-radar 2>/dev/null || echo $(HOME)/.local/bin
 ai-kubeconfig: ## Write a read-only kubeconfig for Radar (ai-readonly SA, short-lived token) to AI_KUBECONFIG
 	@AI_KUBECONFIG="$(AI_KUBECONFIG)" ./scripts/ai-kubeconfig.sh
 
-radar: ## Run Radar locally (read-only identity + read-only MCP) on :9280 — run `make ai-kubeconfig` first
-	@test -f "$(AI_KUBECONFIG)" || { echo "Missing $(AI_KUBECONFIG) — run 'make ai-kubeconfig' first"; exit 1; }
+radar: ## Run Radar locally (read-only identity + read-only MCP) on :9280; mints the read-only kubeconfig if missing/expired
 	@test -x "$(RADAR)" || { echo "Radar not found — install it: https://github.com/skyhook-io/radar#installation"; exit 1; }
+	@AI_KUBECONFIG="$(AI_KUBECONFIG)" ./scripts/ai-kubeconfig.sh --if-needed
 	env -u KUBECONFIG "$(RADAR)" --kubeconfig "$(AI_KUBECONFIG)" --mcp-read-only $(RADAR_FLAGS)
 
 vault-init: ## Configure Vault (auth, policies, roles, secrets) via Terraform — safe to re-run

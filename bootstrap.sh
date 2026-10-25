@@ -385,6 +385,10 @@ printf "  %-14s %s\n" "Grafana"  "http://grafana.local:8080"
 printf "  %-14s %s\n" "Vault"    "http://vault.local:8080"
 printf "  %-14s %s\n" "Wallet"   "http://wallet.local:8080"
 
+# Only a pointer: the read-only token is minted by `make radar` when it
+# starts, so its 8h lifetime begins when it's used, not at bootstrap time.
+echo -e "\n🤖 AI-assisted ops (optional): 'make radar', then run 'claude' from the repo root."
+
 END_TIME=$SECONDS
 DURATION=$((END_TIME - START_TIME))
 MINUTES=$((DURATION / 60))

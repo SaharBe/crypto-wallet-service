@@ -338,7 +338,7 @@ the frontend's reverse proxy, and HPA scaling of the backends.
 | `make vault-init` | Re-applies the Vault Terraform config. Safe to re-run |
 | `make build` | Builds all service images and pushes them to ECR |
 | `make argocd-password` | Prints the ArgoCD admin login for the UI |
-| `make ai-kubeconfig` / `make radar` | Writes the read-only AI kubeconfig, then runs Radar with it on `localhost:9280` ([AI-Assisted Operations](#ai-assisted-operations)) |
+| `make radar` | Runs Radar on `localhost:9280` with the read-only AI kubeconfig, minting it first if it's missing or expired ([AI-Assisted Operations](#ai-assisted-operations)). `make ai-kubeconfig` forces a new token |
 | `make test-load` | Runs `load-test.js` against `BASE_URL` (default `http://localhost:8080`) with `Host: wallet.local` |
 | `make test-load K6_SCRIPT=spike-test.js` | Runs a specific script: `load-test.js`, `spike-test.js` or `kafka-pipeline-stress.js` |
 | `make test-load K6_MODE=cluster` | Runs k6 as an ephemeral in-cluster Pod that hits the `frontend` Service directly and pushes metrics to Prometheus |
@@ -566,8 +566,8 @@ the cluster):
 
 ```bash
 # once: install Radar (https://github.com/skyhook-io/radar#installation)
-make ai-kubeconfig   # ~/.kube/ai-readonly.kubeconfig, short-lived token (8h)
-make radar           # Radar on http://localhost:9280, read-only MCP
+make radar           # Radar on http://localhost:9280, read-only MCP. On a fresh cluster it
+                     # waits for ArgoCD to create the ServiceAccount, then mints the token
 claude               # from the repo root; approve the project's "radar" MCP server once
 ```
 
@@ -577,7 +577,7 @@ claude               # from the repo root; approve the project's "radar" MCP ser
 |---|---|---|
 | RBAC (the actual boundary) | ServiceAccount `ai-readonly` with `get/list/watch` only. The core group is an explicit list, so `secrets` is never granted. No `pods/exec`, `pods/portforward`, `services/proxy` | [`k8s/apps/ai-ops/rbac.yaml`](k8s/apps/ai-ops/rbac.yaml), synced by ArgoCD |
 | Isolated kubeconfig | Holds only the read-only context. Radar can switch between kubeconfig contexts, so it never sees the operator's admin context | [`scripts/ai-kubeconfig.sh`](scripts/ai-kubeconfig.sh) |
-| Short-lived token | `kubectl create token` (8h), not a long-lived token Secret. Re-run `make ai-kubeconfig` when it expires | same script |
+| Short-lived token | `kubectl create token` (8h), not a long-lived token Secret. Minted when `make radar` starts (not at bootstrap), and replaced automatically once it's expired, close to expiry, or rejected by a rebuilt cluster | same script |
 | Read-only MCP | `--mcp-read-only` serves `/mcp-readonly` only. Write tools can't be listed or called, and `/mcp` returns 404 | `make radar`, [`.mcp.json`](.mcp.json) |
 | Human in the loop | The agent proposes fixes. Changes go through a branch, a PR and ArgoCD, same as any other change | [CLAUDE.md](CLAUDE.md) |
 

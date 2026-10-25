@@ -303,8 +303,9 @@ Stop every port-forward you start (Ctrl+C / `kill %1`) before finishing.
 ### 4.5 Read-only cluster diagnosis (Radar MCP)
 
 ```bash
-make ai-kubeconfig   # ~/.kube/ai-readonly.kubeconfig (ai-readonly SA, 8h token)
-make radar           # Radar on :9280 with that kubeconfig; MCP at /mcp-readonly
+make radar           # Radar on :9280, MCP at /mcp-readonly. Reuses ~/.kube/ai-readonly.kubeconfig,
+                     # or mints a new 8h token if it's missing/expired/from an old cluster
+make ai-kubeconfig   # force a new token
 ```
 
 When Radar is running, the project's `radar` MCP server (`.mcp.json`) is

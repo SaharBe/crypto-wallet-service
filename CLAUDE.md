@@ -28,6 +28,7 @@ Kind in CI).
 | Services | `wallet-service`, `order-service` (Node.js), `frontend` (nginx) | `services/` |
 | Performance | k6 (local or ephemeral in-cluster Pod, metrics → Prometheus remote-write) | `tests/performance/` |
 | CI/CD | `pr-checks.yml` (PR gate), `ci.yml` (build → ECR → pin image tags on `main`) | `.github/workflows/` |
+| AI-assisted ops | Radar (local) MCP server, read-only `ai-readonly` ServiceAccount | `.mcp.json`, `k8s/apps/ai-ops/`, `scripts/ai-kubeconfig.sh` |
 
 Further reading: [README.md](README.md), [architecture.md](architecture.md),
 [tests/performance/README.md](tests/performance/README.md),
@@ -299,7 +300,20 @@ kubectl port-forward svc/frontend 8081:80 -n crypto-wallet-app                  
 
 Stop every port-forward you start (Ctrl+C / `kill %1`) before finishing.
 
-### 4.5 Platform lifecycle (confirm with the user first)
+### 4.5 Read-only cluster diagnosis (Radar MCP)
+
+```bash
+make ai-kubeconfig   # ~/.kube/ai-readonly.kubeconfig (ai-readonly SA, 8h token)
+make radar           # Radar on :9280 with that kubeconfig; MCP at /mcp-readonly
+```
+
+When Radar is running, the project's `radar` MCP server (`.mcp.json`) is
+the preferred way to **read** cluster state: issues, events, logs,
+NetworkPolicy reachability. It can't write, by design. Never point Radar at
+`~/.kube/config`, and never widen `k8s/apps/ai-ops/rbac.yaml` (secrets,
+write verbs, exec/proxy) to make a diagnosis easier.
+
+### 4.6 Platform lifecycle (confirm with the user first)
 
 ```bash
 make up            # full bootstrap via ./bootstrap.sh
@@ -308,7 +322,7 @@ make build         # build & push all service images to ECR
 make down          # DESTRUCTIVE: terraform destroy on terraform/infra (auto-approved)
 ```
 
-### 4.6 Quick health checks
+### 4.7 Quick health checks
 
 ```bash
 kubectl get pods -A | grep -v -E 'Running|Completed'

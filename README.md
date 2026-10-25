@@ -50,6 +50,7 @@ everything around it.
 - [CI/CD](#cicd)
 - [Autoscaling & Resilience Strategy](#autoscaling--resilience-strategy)
 - [Resilience Experiments](#resilience-experiments)
+- [AI-Assisted Operations](#ai-assisted-operations)
 - [Security Model](#security-model)
 - [Known Limitations & Hardening Roadmap](#known-limitations--hardening-roadmap)
 - [Development & Contributing Workflow](#development--contributing-workflow)
@@ -95,7 +96,8 @@ flowchart LR
 `k8s/root-app.yaml`) points ArgoCD at `k8s/apps/`. That directory fans out
 into one `Application` or `ApplicationSet` per concern: ingress-nginx,
 Kyverno and its policies, Vault, External Secrets, Kafka, metrics-server,
-the monitoring stack, and the wallet app itself. Sync waves order the
+the monitoring stack, the read-only RBAC for AI-assisted ops, and the
+wallet app itself. Sync waves order the
 bootstrap so that CRDs and secret stores exist before anything consumes
 them. [architecture.md](architecture.md) covers the full breakdown.
 
@@ -118,6 +120,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 | Performance | **k6** | Load, spike and Kafka-pipeline stress scripts, run locally or as an ephemeral in-cluster Pod |
 | CI/CD | **GitHub Actions** | PR gate (lint, kustomize, kubeconform, helm template, k6 on Kind) and build → ECR → auto-pin pipeline |
 | Local dev | **Docker Compose** | The full app stack with no cloud dependencies |
+| AI-assisted ops | **Radar** (Skyhook, MCP server) + **Claude Code** | Read-only cluster diagnosis through MCP, with a dedicated `get/list/watch` ServiceAccount (no `secrets`) |
 
 ## Repository Layout
 
@@ -127,6 +130,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 ├── k8s/
 │   ├── root-app.yaml         # App-of-Apps entry point (applied once by bootstrap.sh)
 │   ├── apps/                 # One ArgoCD Application per platform concern (+ ApplicationSet)
+│   │   └── ai-ops/           # Read-only RBAC for the AI agent (Radar MCP)
 │   ├── components/           # Wallet app base manifests (Deployments, HPA, ExternalSecret, Postgres, NetworkPolicies)
 │   ├── overlays/ci/          # Kind overlay used by the PR performance gate
 │   └── bootstrap-secrets/    # Template for the one imperatively-seeded repo credential
@@ -137,7 +141,9 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 │   └── modules/vault-config/ # Reusable "one consumer = one role + policy + secret" module
 ├── tests/performance/        # k6 scripts + in-cluster runner
 ├── local-dev/                # Compose init SQL + end-to-end smoke test
-├── scripts/                  # setup-hosts, CI helpers
+├── scripts/                  # setup-hosts, read-only AI kubeconfig, CI helpers
+├── docs/                     # Experiment evidence (resilience screenshots, AI-ops demo)
+├── .mcp.json                 # Claude Code → Radar read-only MCP endpoint
 ├── docker-compose.yml        # Local stack
 ├── bootstrap.sh              # End-to-end cloud bootstrap (`make up`)
 └── Makefile                  # Single operations entry point (`make help`)
@@ -332,6 +338,7 @@ the frontend's reverse proxy, and HPA scaling of the backends.
 | `make vault-init` | Re-applies the Vault Terraform config. Safe to re-run |
 | `make build` | Builds all service images and pushes them to ECR |
 | `make argocd-password` | Prints the ArgoCD admin login for the UI |
+| `make ai-kubeconfig` / `make radar` | Writes the read-only AI kubeconfig, then runs Radar with it on `localhost:9280` ([AI-Assisted Operations](#ai-assisted-operations)) |
 | `make test-load` | Runs `load-test.js` against `BASE_URL` (default `http://localhost:8080`) with `Host: wallet.local` |
 | `make test-load K6_SCRIPT=spike-test.js` | Runs a specific script: `load-test.js`, `spike-test.js` or `kafka-pipeline-stress.js` |
 | `make test-load K6_MODE=cluster` | Runs k6 as an ephemeral in-cluster Pod that hits the `frontend` Service directly and pushes metrics to Prometheus |
@@ -538,6 +545,68 @@ All test resources were removed afterwards (k6 Pod/ConfigMap,
 port-forwards, probe loops). `selfHeal` was never paused, because none of
 the experiments needed it.
 
+## AI-Assisted Operations
+
+Claude Code diagnoses the live cluster through
+[Radar](https://github.com/skyhook-io/radar), an open-source Kubernetes UI
+with a built-in MCP server (PLAT-504). The agent gets structured, minified
+cluster data (issues, events, topology, logs, NetworkPolicy reasoning)
+instead of raw `kubectl` output, and it gets it **read-only**.
+
+```mermaid
+flowchart LR
+    CC["Claude Code<br/>(.mcp.json)"] -->|"MCP over HTTP<br/>/mcp-readonly"| R["Radar<br/>(local binary, :9280)"]
+    R -->|"ai-readonly SA token<br/>(only context in its kubeconfig)"| API["EKS API server"]
+    API -->|"RBAC: ClusterRole ai-readonly<br/>get / list / watch, no secrets"| C["cluster state"]
+    CC -.->|"fixes: branch + PR only"| G["git → ArgoCD"]
+```
+
+**Setup** (Radar runs on the operator's laptop, so nothing extra runs in
+the cluster):
+
+```bash
+# once: install Radar (https://github.com/skyhook-io/radar#installation)
+make ai-kubeconfig   # ~/.kube/ai-readonly.kubeconfig, short-lived token (8h)
+make radar           # Radar on http://localhost:9280, read-only MCP
+claude               # from the repo root; approve the project's "radar" MCP server once
+```
+
+**Guardrails**, from the outside in:
+
+| Layer | What it does | Where |
+|---|---|---|
+| RBAC (the actual boundary) | ServiceAccount `ai-readonly` with `get/list/watch` only. The core group is an explicit list, so `secrets` is never granted. No `pods/exec`, `pods/portforward`, `services/proxy` | [`k8s/apps/ai-ops/rbac.yaml`](k8s/apps/ai-ops/rbac.yaml), synced by ArgoCD |
+| Isolated kubeconfig | Holds only the read-only context. Radar can switch between kubeconfig contexts, so it never sees the operator's admin context | [`scripts/ai-kubeconfig.sh`](scripts/ai-kubeconfig.sh) |
+| Short-lived token | `kubectl create token` (8h), not a long-lived token Secret. Re-run `make ai-kubeconfig` when it expires | same script |
+| Read-only MCP | `--mcp-read-only` serves `/mcp-readonly` only. Write tools can't be listed or called, and `/mcp` returns 404 | `make radar`, [`.mcp.json`](.mcp.json) |
+| Human in the loop | The agent proposes fixes. Changes go through a branch, a PR and ArgoCD, same as any other change | [CLAUDE.md](CLAUDE.md) |
+
+`--mcp-read-only` alone isn't a security boundary: Radar's own UI and REST
+API can still issue writes. RBAC is what stops them. A restart sent
+straight to Radar's REST API came back `403 ... cannot patch resource
+"deployments"`.
+
+**Demo** ([full transcripts and checks](docs/ai-assisted-ops-demo.md)):
+Claude ran with only the Radar tools allowed (no Bash, no file access) and
+was asked about two failures by symptom alone.
+
+| Failure injected | Question asked | Diagnosis |
+|---|---|---|
+| Deployment without resource limits | "I applied demo-no-limits but it doesn't show up anywhere" | Rejected at admission by Kyverno `require-resource-limits` (Enforce); add CPU/memory limits |
+| Client Pod calling wallet-service | "It can't reach wallet-service:3000, but wallet-service looks healthy" | `default-deny-ingress` + `allow-frontend-to-backends` admits only `app: frontend`; add a one-hop allow rule through a PR |
+
+Both were correct, in about 40 s and 5 Radar calls each.
+
+**Known gaps:** Radar finds Prometheus by port-forwarding to it, which this
+identity can't do, so metrics tools return nothing by default. To give the
+agent metrics, port-forward Prometheus with your own identity
+(`kubectl port-forward svc/monitoring-stack-kube-prom-prometheus 9090:9090
+-n monitoring`) and run `make radar RADAR_FLAGS="--prometheus-url
+http://localhost:9090"`. The Helm view is empty because Helm release
+records are Secrets, and ArgoCD-rendered charts don't create them anyway.
+Running agents in-cluster is on the
+[roadmap](#known-limitations--hardening-roadmap).
+
 ## Security Model
 
 - **No plaintext secrets in git.** Runtime credentials (Postgres, Grafana
@@ -562,6 +631,10 @@ the experiments needed it.
   so the policies are enforced and not just stored.
 - **Protected `main`.** Every change goes through a PR, including CI's
   own image pins.
+- **Read-only AI access.** The AI agent reaches the cluster only through
+  the `ai-readonly` ServiceAccount: `get/list/watch`, no `secrets`, no
+  `exec`/`port-forward`/`proxy`. Its fixes land as PRs like everyone
+  else's. See [AI-Assisted Operations](#ai-assisted-operations).
 
 Some settings were chosen for a demo environment and would change in
 production: Vault runs in dev mode, ingress is reached over a
@@ -584,7 +657,7 @@ table, including Kafka, CI auth and supply chain, is in
 | **Vault dev mode** | `server.dev.enabled: true` (`k8s/apps/vault.yaml`): in-memory storage, auto-unsealed, root token. `make vault-init` re-seeds it from `terraform/vault-config` after a restart | Simplicity. No init/unseal ceremony and no key custody, and all config is Terraform, so a restart is one command | 3-replica HA with Raft integrated storage, `seal "awskms"` auto-unseal through IRSA, recovery keys held outside the cluster, root token revoked after bootstrap, TLS, audit device, Raft snapshots to S3 |
 | **TLS / HTTPS** | HTTP on `*.local` through `make ingress-forward`. ingress-nginx is `ClusterIP`; the Ingresses in `k8s/apps/ingress/` have no `tls:` block | Cost of an NLB and a domain. Exposing ArgoCD, Vault and Grafana publicly would widen the attack surface for no user benefit | Route53 hosted zone + ExternalDNS, ingress-nginx behind an NLB, cert-manager with a Let's Encrypt `ClusterIssuer` using DNS-01 on Route53 through IRSA. Admin UIs stay internal (internal NLB/VPN or SSO). Alternative: terminate TLS at the NLB with ACM |
 | **Distributed tracing** | Metrics only (Prometheus, kafka-exporter, k6 remote-write) | Metrics and alerts cover most of the value for two services, and every extra pod counts against the ceiling | PLAT-503: OpenTelemetry Node.js auto-instrumentation (HTTP, Express, pg), `traceparent` propagated in Kafka message headers, Jaeger (or Tempo) through ArgoCD with limits and a NetworkPolicy allow rule for OTLP |
-| **In-cluster AI agents** | AI-assisted ops runs outside the cluster with read-only access (PLAT-504/505) | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
+| **In-cluster AI agents** | AI-assisted ops runs on the operator's laptop: Claude Code → Radar MCP with a read-only ServiceAccount ([AI-Assisted Operations](#ai-assisted-operations), PLAT-504). Triage skills: PLAT-505 | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
 
 Gaps found by the [resilience experiments](#resilience-experiments) are
 tracked the same way: graceful shutdown (PLAT-507), a consumer stuck at

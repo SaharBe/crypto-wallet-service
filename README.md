@@ -428,7 +428,7 @@ below are UTC. The Grafana screenshots show local time (UTC+3).
 |---|---|---|---|---|
 | 1 | Deleted a `wallet-service` pod, then the only `order-service` pod, during k6 `load-test.js` (up to 100 VUs) | ReplicaSet replaces the pod; short error burst at most | **0 failed requests** out of 16,793 | Replacement Ready in ~10 s |
 | 2 | Deleted the `order-service` Service; changed `order-service`'s memory limit with a live patch | ArgoCD `selfHeal` restores git state | Both reverted by an automated sync | ~3 s each |
-| 3 | Deleted the Postgres pod (single instance, no failover) | Short outage, PVC data survives, clients reconnect | Data intact, clients reconnected, **but 8 orders lost** (see findings) | ~2 s DB downtime |
+| 3 | Deleted the Postgres pod (single instance, no failover) | Short outage, PVC data survives, clients reconnect | Data intact, clients reconnected, **but 8 orders lost** (see findings). Re-run after the PLAT-506 fix: **0 lost** (83/83) | ~2 s DB downtime |
 | 4 | Scaled `wallet-service` (the Kafka consumer) to 0, produced orders, scaled back | Lag builds, then drains with no loss | 284 orders queued, all 284 applied | Lag drained ~4 s after the pod was Ready |
 
 ### 1. Pod kill under load
@@ -478,6 +478,14 @@ HPA had scaled `wallet-service` to 2. `order-service` was at 1.
   8 orders will never be retried. They match the 8
   `Failed to parse or process message: connect ECONNREFUSED` lines that
   wallet-service logged during the ~2 s outage.
+- Round 3, after the PLAT-506 fix (2026-10-25, image `93cbdba`): same
+  stream (~1.4 orders/s for 60 s through `svc/frontend`), with the pod
+  deleted at 13:01:52. `order-service` accepted **83** orders and **83**
+  were applied. Lag was 0. The order in flight when the pod went away
+  (partition 1, offset 15) logged `Postgres unavailable` twice with
+  `ECONNREFUSED`, was retried after 1 s and 2 s, and was applied once
+  the new pod accepted connections. No consumer crash, no rebalance, no
+  wallet-service restart.
 - Not tested: a reschedule to a different node (node drain or failure).
   That adds the EBS detach/attach time, and the volume is pinned to one AZ.
 
@@ -508,7 +516,8 @@ HPA had scaled `wallet-service` to 2. `order-service` was at 1.
    offset is committed only once the order is applied. Messages that can
    never be applied (malformed, failed validation, Postgres data errors)
    are skipped with a log line. Verified locally against a 60 s Postgres
-   outage: every order applied and lag drained to 0. Remaining tradeoff:
+   outage and live on EKS (experiment 3, round 3): every order applied
+   and lag drained to 0. Remaining tradeoff:
    delivery is at-least-once and the UPSERT adds to the balance, so a
    re-delivery can apply an order twice (PLAT-510). Skipped messages go
    to logs only, with no DLQ yet (PLAT-511).

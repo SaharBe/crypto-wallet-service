@@ -3,6 +3,13 @@ kind: Application
 metadata:
   name: kyverno
   namespace: argocd
+  annotations:
+    # Chart 3.9.x renders its policies.kyverno.io CRDs with empty
+    # `labels: {}` / `annotations: {}`. The API server drops empty maps, so
+    # a client-side diff sees a permanent difference on those 11 CRDs and
+    # the app never reports Synced. A server-side diff compares against the
+    # API server's own dry-run result, which normalizes them the same way.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

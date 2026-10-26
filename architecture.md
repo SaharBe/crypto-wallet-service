@@ -43,7 +43,7 @@ flowchart TB
     subgraph AWS["AWS (us-east-1)"]
         ECR["ECR<br/>wallet / order / frontend"]
         S3["S3 + DynamoDB<br/>Terraform remote state"]
-        subgraph EKS["EKS 1.31 · 3× t3.medium (private subnets)"]
+        subgraph EKS["EKS 1.35 · 3× t3.medium (private subnets)"]
             ARGO["ArgoCD<br/>root-application"]
             KYV["Kyverno"]
             VAULT["Vault"]
@@ -82,7 +82,7 @@ lifecycle.
 | Root module | Provisions | State |
 |---|---|---|
 | `terraform/state-backend` | S3 bucket (versioned, SSE-encrypted, public access blocked) and DynamoDB lock table | Local (bootstrap chicken-and-egg) |
-| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.31** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push), **EBS CSI driver** as an EKS add-on with an IRSA role, **VPC CNI** as a managed EKS add-on with `enableNetworkPolicy: "true"` | S3 remote backend |
+| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.35** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push), **EBS CSI driver** as an EKS add-on with an IRSA role, **VPC CNI** as a managed EKS add-on with `enableNetworkPolicy: "true"` | S3 remote backend |
 | `terraform/vault-config` | Vault Kubernetes auth backend, KV v2 mount, and one **policy + role + secret** per consumer through `terraform/modules/vault-config` | S3 remote backend |
 
 The `gp3` StorageClass (`k8s/apps/ebs-storageclass.yaml`) is backed by the

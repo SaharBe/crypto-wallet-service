@@ -105,7 +105,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 
 | Area | Technology | Role in the platform |
 |---|---|---|
-| Cloud & IaC | **AWS EKS 1.31**, VPC, ECR, EBS CSI · **Terraform** | 3× `t3.medium` managed node group in private subnets. Remote state in S3 with a DynamoDB lock table (`terraform/state-backend`) |
+| Cloud & IaC | **AWS EKS 1.35**, VPC, ECR, EBS CSI · **Terraform** | 3× `t3.medium` managed node group in private subnets. Remote state in S3 with a DynamoDB lock table (`terraform/state-backend`) |
 | Orchestration | **Kubernetes**, **Kustomize** | Base manifests in `k8s/components`, plus a CI overlay for Kind |
 | GitOps | **ArgoCD** (App-of-Apps + ApplicationSet) | Continuous reconciliation from `main` with `selfHeal` + `prune` |
 | Secrets | **HashiCorp Vault** + **External Secrets Operator** | Vault KV v2 with Kubernetes auth and one scoped role per consumer, configured by Terraform (`terraform/vault-config`) |

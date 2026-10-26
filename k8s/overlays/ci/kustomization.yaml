@@ -88,7 +88,7 @@ patches:
       kind: ClusterSecretStore
       name: vault-crypto-app
     patch: |-
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ClusterSecretStore
       metadata:
         name: vault-crypto-app
@@ -97,7 +97,7 @@ patches:
       kind: ExternalSecret
       name: crypto-db-external-secret
     patch: |-
-      apiVersion: external-secrets.io/v1beta1
+      apiVersion: external-secrets.io/v1
       kind: ExternalSecret
       metadata:
         name: crypto-db-external-secret

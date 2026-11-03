@@ -58,12 +58,37 @@ spec:
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: kafka
+  # The chart generates the KRaft cluster-id and controller-0-id into the
+  # kafka-kraft Secret, reusing existing values via Helm `lookup`. ArgoCD
+  # renders with `helm template`, where `lookup` returns nothing, so every
+  # fresh render produces new random IDs, a new checksum/secret on the pod
+  # template, and a broker rollout (confirmed live: 5 rollouts in the first
+  # 5 minutes of a `make up`, the checksum the only field that changed).
+  # Ignoring both keeps the IDs from the first sync for the cluster's
+  # lifetime, which also keeps them matching meta.properties on the PVC.
+  # controller-0-id can't be pinned via values (the chart hardcodes it as
+  # generated), so setting `clusterId` alone wouldn't be enough.
+  ignoreDifferences:
+    - kind: Secret
+      name: kafka-kraft
+      namespace: kafka
+      jsonPointers:
+        - /data
+    - group: apps
+      kind: StatefulSet
+      name: kafka-controller
+      namespace: kafka
+      jsonPointers:
+        - /spec/template/metadata/annotations/checksum~1secret
   syncPolicy:
     automated:
       prune: true
       selfHeal: true
     syncOptions:
       - CreateNamespace=true
+      # Without this, ignoreDifferences only hides the drift from the diff;
+      # a sync triggered for any other reason would still push new IDs.
+      - RespectIgnoreDifferences=true
     # See k8s/root-app.yaml for why: retry transient failures instead of
     # leaving the sync failed until the next selfHeal pass.
     retry:

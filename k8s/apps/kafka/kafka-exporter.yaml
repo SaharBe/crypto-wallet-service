@@ -22,6 +22,24 @@ spec:
       labels:
         app: kafka-exporter
     spec:
+      # kafka_exporter exits at startup (klog.Fatal "Error Init Kafka
+      # Client") if no broker answers, which the probes can't help with.
+      # Waiting here turns "broker not up yet" into a pending init instead
+      # of a crash loop with up to 5 minutes of back-off after it's back.
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36.1
+          command:
+            - sh
+            - -c
+            - until nc -z -w 3 kafka.kafka.svc.cluster.local 9092; do echo "waiting for kafka:9092"; sleep 5; done
+          resources:
+            requests:
+              memory: "8Mi"
+              cpu: "5m"
+            limits:
+              memory: "16Mi"
+              cpu: "50m"
       containers:
         - name: kafka-exporter
           image: danielqsj/kafka-exporter:v1.10.0
@@ -42,20 +60,27 @@ spec:
             limits:
               memory: "128Mi"
               cpu: "150m"
+          # /healthz only answers "ok" from the HTTP server (no Kafka call).
+          # /metrics queries the broker on every request and blocks past the
+          # probe timeout while the broker is down, so a liveness probe on it
+          # restarted a perfectly healthy exporter into CrashLoopBackOff on
+          # every broker restart. Liveness is for a hung process only.
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: 9308
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
+          # Readiness stays on /metrics: while the broker is unreachable
+          # there's nothing useful to scrape, so NotReady is the right state.
           readinessProbe:
             httpGet:
               path: /metrics
               port: 9308
             initialDelaySeconds: 5
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10
 ---
 apiVersion: v1
 kind: Service

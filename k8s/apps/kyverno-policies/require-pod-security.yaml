@@ -1,0 +1,150 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-security
+  annotations:
+    policies.kyverno.io/title: Require Pod Security (restricted subset)
+    policies.kyverno.io/category: Pod Security Standards (Restricted)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Pods must run as non-root, without privilege escalation, with ALL
+      capabilities dropped (only NET_BIND_SERVICE may be added back), and
+      without host namespaces or privileged mode. Rules follow Kyverno's
+      Pod Security Standards "restricted" sample policies (PLAT-512).
+spec:
+  # Rolled out in Audit first (PLAT-512): PolicyReports showed what still
+  # failed before switching to Enforce.
+  validationFailureAction: Audit
+  # true, unlike require-resource-limits: background scans are what write
+  # PolicyReports for Pods that already exist, which is how the Audit phase
+  # is checked (`kubectl get policyreport -A`). None of the rules read
+  # request.userInfo, so they're valid in the background too.
+  background: true
+  rules:
+    - name: disallow-host-namespaces
+      match: &match
+        any:
+          - resources:
+              kinds:
+                - Pod
+      # Same exclusions as require-resource-limits. `monitoring` holds
+      # node-exporter, whose hostPID/hostNetwork is an accepted exception
+      # (architecture.md §6).
+      exclude: &exclude
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - argocd
+                - kyverno
+                - monitoring
+      validate:
+        message: "hostPID, hostIPC and hostNetwork must be unset or false."
+        pattern:
+          spec:
+            =(hostPID): "false"
+            =(hostIPC): "false"
+            =(hostNetwork): "false"
+    - name: disallow-privileged-containers
+      match: *match
+      exclude: *exclude
+      validate:
+        message: "Privileged mode is not allowed: securityContext.privileged must be unset or false."
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+            =(initContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"
+    - name: require-run-as-non-root
+      match: *match
+      exclude: *exclude
+      validate:
+        message: >-
+          runAsNonRoot must be true, either in the Pod's securityContext or in
+          every container's (and no container may set it to false).
+        anyPattern:
+          - spec:
+              securityContext:
+                runAsNonRoot: "true"
+              =(ephemeralContainers):
+                - =(securityContext):
+                    =(runAsNonRoot): "true"
+              =(initContainers):
+                - =(securityContext):
+                    =(runAsNonRoot): "true"
+              containers:
+                - =(securityContext):
+                    =(runAsNonRoot): "true"
+          - spec:
+              =(ephemeralContainers):
+                - securityContext:
+                    runAsNonRoot: "true"
+              =(initContainers):
+                - securityContext:
+                    runAsNonRoot: "true"
+              containers:
+                - securityContext:
+                    runAsNonRoot: "true"
+    - name: disallow-privilege-escalation
+      match: *match
+      exclude: *exclude
+      validate:
+        message: "Every container must set securityContext.allowPrivilegeEscalation: false."
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: "false"
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: "false"
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: "false"
+    - name: require-drop-all-capabilities
+      match: *match
+      exclude: *exclude
+      # foreach/deny rather than a pattern: "ALL" has to be *one of* the
+      # dropped entries, which a pattern can't express.
+      preconditions:
+        all:
+          - key: "{{ request.operation || 'BACKGROUND' }}"
+            operator: NotEquals
+            value: DELETE
+      validate:
+        message: "Every container must drop ALL capabilities (securityContext.capabilities.drop: [ALL])."
+        foreach:
+          - list: request.object.spec.[ephemeralContainers, initContainers, containers][]
+            deny:
+              conditions:
+                all:
+                  - key: ALL
+                    operator: AnyNotIn
+                    value: "{{ element.securityContext.capabilities.drop[].to_upper(@) || `[]` }}"
+    - name: restrict-added-capabilities
+      match: *match
+      exclude: *exclude
+      preconditions:
+        all:
+          - key: "{{ request.operation || 'BACKGROUND' }}"
+            operator: NotEquals
+            value: DELETE
+      validate:
+        message: "Only NET_BIND_SERVICE may be added back (ingress-nginx needs it for :80/:443)."
+        foreach:
+          - list: request.object.spec.[ephemeralContainers, initContainers, containers][]
+            deny:
+              conditions:
+                all:
+                  - key: "{{ element.securityContext.capabilities.add[].to_upper(@) || `[]` }}"
+                    operator: AnyNotIn
+                    value:
+                      - NET_BIND_SERVICE
+                      - ""

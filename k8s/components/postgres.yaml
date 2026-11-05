@@ -32,9 +32,32 @@ spec:
       labels:
         app: postgres
     spec:
+      # Non-root (PLAT-512): runs directly as the image's `postgres` user
+      # (uid/gid 999) instead of starting as root and dropping to it via gosu.
+      # The entrypoint supports this: it skips its root-only chown steps and
+      # still chmods PGDATA back to 0700 on every start, which postgres
+      # insists on and which fsGroup's g+rwx would otherwise break.
+      # Existing data is unaffected: pgdata was already owned by 999.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # Makes a freshly provisioned EBS volume's root dir (root-owned ext4)
+        # group-writable so the non-root entrypoint can mkdir PGDATA in it.
+        # OnRootMismatch: chgrp the volume recursively only the first time,
+        # not on every Pod start.
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           # k8s/apps/kyverno-policies/disallow-missing-limits.yaml requires
           # every container to declare both — this container never had to
           # before because its only prior Pod predates that policy (admission
@@ -86,6 +109,12 @@ spec:
             # 2. Persist actual database files across Pod restarts/reschedules
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            # 3. Writable paths with a read-only root filesystem: the unix
+            # socket + pid lock dir, and scratch space
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
       volumes:
         # 3. Define the volume using the ConfigMap you created
         - name: postgres-init-volume
@@ -94,6 +123,12 @@ spec:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-data
+        - name: postgres-run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service

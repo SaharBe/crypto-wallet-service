@@ -22,6 +22,15 @@ spec:
       labels:
         app: kafka-exporter
     spec:
+      # Non-root (PLAT-512): the image already runs as `nobody`; pinning the
+      # uid lets runAsNonRoot verify it, and busybox's nc needs no privilege
+      # either.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       # kafka_exporter exits at startup (klog.Fatal "Error Init Kafka
       # Client") if no broker answers, which the probes can't help with.
       # Waiting here turns "broker not up yet" into a pending init instead
@@ -33,6 +42,11 @@ spec:
             - sh
             - -c
             - until nc -z -w 3 kafka.kafka.svc.cluster.local 9092; do echo "waiting for kafka:9092"; sleep 5; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               memory: "8Mi"
@@ -44,6 +58,11 @@ spec:
         - name: kafka-exporter
           image: danielqsj/kafka-exporter:v1.10.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             # Same stable Service DNS as every other in-cluster Kafka
             # client (see k8s/components/wallet-service.yaml) rather than

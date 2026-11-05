@@ -15,10 +15,27 @@ spec:
       labels:
         app: order-service
     spec:
+      # Non-root (PLAT-512), same as wallet-service.yaml: the image's `node`
+      # user (uid/gid 1000).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: order-service
         image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/order-service:93cbdbae54893f30a568582f57bbc59f266b5fe7
         imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         resources:
           requests:
             memory: "192Mi"
@@ -58,6 +75,10 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
 
 ---
 apiVersion: v1

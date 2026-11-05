@@ -20,7 +20,7 @@ Kind in CI).
 | Secrets | HashiCorp Vault + External Secrets Operator (ESO) | `k8s/apps/vault.yaml`, `k8s/apps/external-secrets.yaml`, `terraform/vault-config` |
 | Delivery | ArgoCD App-of-Apps (`k8s/root-app.yaml` → `k8s/apps/`) + one ApplicationSet | `k8s/apps/crypto-wallet-appset.yaml` |
 | Manifests | Kustomize (base in `k8s/components`, CI overlay in `k8s/overlays/ci`) | `k8s/` |
-| Policy | Kyverno (`require-resource-limits`, **Enforce** mode) | `k8s/apps/kyverno-policies/` |
+| Policy | Kyverno (`require-resource-limits`, `require-pod-security`, **Enforce** mode) | `k8s/apps/kyverno-policies/` |
 | Network isolation | NetworkPolicies, default-deny ingress in `crypto-wallet-app`; enforced by the VPC CNI add-on (`enableNetworkPolicy`) | `k8s/components/network-policies.yaml`, `terraform/infra/eks.tf` |
 | Messaging | Kafka (Bitnami chart) + kafka-exporter | `k8s/apps/kafka-app.yaml`, `k8s/apps/kafka/` |
 | Observability | kube-prometheus-stack (Prometheus + Grafana), dashboards as plain JSON | `k8s/apps/monitoring-app.yaml`, `k8s/apps/monitoring/` |
@@ -87,6 +87,14 @@ Run the same checks CI runs (Section 4.1). All must pass:
 - **Every container outside `kube-system`, `argocd`, `kyverno` and `monitoring`
   must set `resources.limits.cpu` and `resources.limits.memory`.** Kyverno
   rejects the Pod otherwise. Set requests too.
+- **The same containers must also run non-root and unprivileged**
+  (`require-pod-security`): `runAsNonRoot: true` (with an explicit
+  `runAsUser`), `allowPrivilegeEscalation: false`,
+  `capabilities.drop: ["ALL"]` (only `NET_BIND_SERVICE` may be added back),
+  and no `privileged`, `hostPID`, `hostIPC` or `hostNetwork`. Copy the
+  securityContext from `k8s/components/wallet-service.yaml`, and add
+  `readOnlyRootFilesystem: true` with `emptyDir` mounts for the paths the
+  process writes to. Images need a non-root `USER` (see `services/*/Dockerfile`).
 - `crypto-wallet-app` is **default-deny for ingress**. A new workload there,
   or a new caller of an existing one, gets no traffic until you add a
   matching allow rule to `k8s/components/network-policies.yaml`. Open one
@@ -340,7 +348,8 @@ kubectl get events -A --field-selector reason=PolicyViolation
 
 - [ ] Work is on a `feat/...` or `fix/...` branch, not `main`.
 - [ ] yamllint, kustomize build, kubeconform (and helm-values check if relevant) pass locally.
-- [ ] New manifests are listed in their `kustomization.yaml`; containers have CPU/memory limits.
+- [ ] New manifests are listed in their `kustomization.yaml`; containers have CPU/memory limits
+      and the non-root securityContext.
 - [ ] No secrets or credentials in the diff.
 - [ ] README.md / architecture.md / CLAUDE.md checked against the change; the PR body says
       what was updated or "Docs: no changes needed".

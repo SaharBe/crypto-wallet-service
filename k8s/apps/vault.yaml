@@ -16,6 +16,34 @@ spec:
         server:
           dev:
             enabled: true
+          # The chart sets no resources, so require-resource-limits rejects
+          # the StatefulSet. The running vault-0 only got in because it was
+          # created before Kyverno's webhook was up; any change to the pod
+          # template (including the securityContext below) was blocked
+          # (confirmed on Kind with Kyverno installed first). Sized from live
+          # usage: ~30m CPU / ~55Mi idle, in-memory dev storage.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          # Container-level hardening for require-pod-security (PLAT-512).
+          # The chart's own default is only allowPrivilegeEscalation: false,
+          # and setting `container` replaces it, so it's repeated here. The
+          # chart's pod-level default (runAsNonRoot, uid 100) is kept as is.
+          # Dropping ALL is safe: the chart sets SKIP_SETCAP, so the
+          # entrypoint never grants the vault binary IPC_LOCK, and dev mode
+          # doesn't mlock.
+          statefulSet:
+            securityContext:
+              container:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
         # Secrets now flow through External Secrets Operator instead of the
         # Agent Injector sidecar — no mutating webhook/caBundle to manage.
         injector:

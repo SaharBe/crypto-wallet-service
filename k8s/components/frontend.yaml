@@ -15,10 +15,34 @@ spec:
       labels:
         app: frontend
     spec:
+      # Non-root (PLAT-512): nginx-unprivileged's `nginx` user (uid/gid 101,
+      # see services/frontend/Dockerfile).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/frontend:93cbdbae54893f30a568582f57bbc59f266b5fe7
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # The only paths nginx writes with a read-only root filesystem:
+          # pid file and *_temp dirs (/tmp in the unprivileged image's
+          # nginx.conf), and the vhost the entrypoint renders from
+          # /etc/nginx/templates at start-up. An empty conf.d also drops the
+          # image's stock default.conf, so only our template is served.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
           ports:
             - containerPort: 8080
           resources:
@@ -59,6 +83,13 @@ spec:
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: nginx-conf
+          emptyDir:
+            sizeLimit: 1Mi
 ---
 apiVersion: v1
 kind: Service

@@ -1,4 +1,8 @@
-FROM nginx:1.27-alpine
+# Same nginx 1.27 build as the stock image, but it runs as the unprivileged
+# `nginx` user (uid 101) out of the box: pid and *_temp paths already live in
+# /tmp, and /etc/nginx/conf.d is writable by that user for the envsubst
+# entrypoint below. Listening on 8080 needs no NET_BIND_SERVICE (PLAT-512).
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 # Static single-page app
 COPY html/ /usr/share/nginx/html/

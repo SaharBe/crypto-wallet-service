@@ -193,9 +193,33 @@ mutating webhook needs managing.
 
 On a cluster with a hard pod ceiling, one unbounded container could starve
 its neighbours, so this policy is what makes the HPA capacity planning
-valid. The policies live in their own Application at wave 1 so they apply
-only after Kyverno's CRDs exist, and the policy is checked against
-Kyverno's CRD schema on every PR.
+valid.
+
+`k8s/apps/kyverno-policies/require-pod-security.yaml` defines the
+`require-pod-security` ClusterPolicy, a subset of the Pod Security Standards
+"restricted" profile:
+
+- **Mode:** `Enforce`, with the same scope as `require-resource-limits`.
+  `background: true`, so existing Pods also show up in PolicyReports.
+- **Rules:** `runAsNonRoot: true`; `allowPrivilegeEscalation: false` on every
+  container; `capabilities.drop` includes `ALL`, and only `NET_BIND_SERVICE`
+  may be added back (ingress-nginx); no `privileged`, `hostPID`, `hostIPC` or
+  `hostNetwork`.
+- **How the workloads comply:** the service images run as a non-root `USER`
+  (`node`, uid 1000; nginx-unprivileged, uid 101). Postgres runs directly as
+  uid 999 instead of dropping from root through gosu. The Deployments also
+  set `readOnlyRootFilesystem` with `emptyDir` mounts for the paths each
+  process writes to, plus the `RuntimeDefault` seccomp profile. Vault's chart
+  values drop ALL capabilities.
+- **Accepted exception:** node-exporter (`monitoring`) keeps `hostPID` and
+  `hostNetwork`, because it reports the node's own processes, `/proc` and
+  network. It runs as uid 65534 with a read-only root filesystem, read-only
+  host mounts, no privilege escalation and no capabilities
+  (`k8s/apps/monitoring-app.yaml`).
+
+The policies live in their own Application at wave 1 so they apply only
+after Kyverno's CRDs exist, and both are checked against Kyverno's CRD
+schema on every PR.
 
 ### Network: default-deny ingress
 
@@ -390,7 +414,7 @@ simplicity. Each would change for a production deployment:
 | PostgreSQL | Single in-cluster Pod on EBS, no backups | CloudNativePG (1 primary + 2 replicas across AZs, S3 WAL archiving / PITR), or Amazon RDS Multi-AZ |
 | CI → AWS auth | Long-lived IAM access keys in GitHub secrets | GitHub OIDC → IAM role (no static credentials) |
 | Image supply chain | ECR scan on push | Tag immutability, image signing (cosign), Kyverno `verifyImages` |
-| Policy coverage | Resource limits | Plus: disallow privileged/root, require probes, restrict registries |
+| Policy coverage | Resource limits; non-root, no privilege escalation, drop ALL, no host namespaces (PLAT-512) | Full PSS "restricted" (seccomp, volume types), require probes, restrict registries, extend to platform namespaces |
 | Network policies | Default-deny **ingress** in `crypto-wallet-app` only; egress open | Default-deny egress with explicit DNS/Kafka/Postgres rules; extend default-deny to platform namespaces |
 | Node networking | VPC-CNI without prefix delegation (17 pods/node) | Enable prefix delegation, or use larger/more nodes + Cluster Autoscaler/Karpenter |
 | Graceful shutdown | `node` runs as PID 1 with no SIGTERM handler, so pods are SIGKILLed after the 30 s grace period ([Resilience Experiments](README.md#resilience-experiments)) | SIGTERM handler that drains HTTP and disconnects Kafka clients, or an init (`tini`) |

@@ -49,6 +49,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The securityContext below runs k6 as its image's own `k6` user (uid 12345):
+# k8s/apps/kyverno-policies/require-pod-security.yaml rejects any Pod in this
+# namespace that isn't non-root with ALL capabilities dropped.
 echo "🚀 Running $SCRIPT as ephemeral Pod '$POD_NAME' against $BASE_URL..."
 kubectl run "$POD_NAME" \
   --namespace "$NAMESPACE" \
@@ -60,12 +63,22 @@ kubectl run "$POD_NAME" \
 {
   "spec": {
     "restartPolicy": "Never",
+    "securityContext": {
+      "runAsNonRoot": true,
+      "runAsUser": 12345,
+      "runAsGroup": 12345,
+      "seccompProfile": {"type": "RuntimeDefault"}
+    },
     "containers": [{
       "name": "k6",
       "image": "grafana/k6:latest",
       "args": [$K6_ARGS, "/scripts/$SCRIPT"],
       "env": [$K6_ENV],
       "volumeMounts": [{"name": "scripts", "mountPath": "/scripts"}],
+      "securityContext": {
+        "allowPrivilegeEscalation": false,
+        "capabilities": {"drop": ["ALL"]}
+      },
       "resources": {
         "requests": {"cpu": "250m", "memory": "256Mi"},
         "limits": {"cpu": "1", "memory": "512Mi"}

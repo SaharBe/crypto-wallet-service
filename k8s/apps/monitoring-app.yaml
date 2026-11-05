@@ -37,6 +37,20 @@ spec:
             passwordKey: "admin-password"
           service:
             type: ClusterIP
+        # node-exporter keeps hostPID/hostNetwork by design: it reports the
+        # node's processes, /proc and network, so dropping them breaks the
+        # node dashboards. That's an accepted exception (architecture.md §6;
+        # `monitoring` is outside require-pod-security). The chart already
+        # runs it as uid 65534 with a read-only root and read-only host
+        # mounts; this closes the one gap Radar flagged (PLAT-512).
+        # readOnlyRootFilesystem is the chart default, repeated so the whole
+        # container context reads in one place.
+        prometheus-node-exporter:
+          containerSecurityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
         prometheus:
           prometheusSpec:
             # Lets k6 push its metrics (k6_vus, k6_http_req_duration_*,

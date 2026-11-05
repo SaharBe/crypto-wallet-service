@@ -15,10 +15,30 @@ spec:
       labels:
         app: wallet-service
     spec:
+      # Non-root (PLAT-512): the image's `node` user (uid/gid 1000, `USER node`
+      # in services/wallet-service/Dockerfile), pinned here too so runAsNonRoot
+      # can verify it. k8s/apps/kyverno-policies/require-pod-security.yaml
+      # rejects Pods without this.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: wallet-service
           image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/wallet-service:93cbdbae54893f30a568582f57bbc59f266b5fe7
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # The only writable path; the app itself never writes to disk.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               memory: "192Mi"
@@ -66,6 +86,10 @@ spec:
               value: "mydb"
             - name: DB_PORT
               value: "5432"
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service

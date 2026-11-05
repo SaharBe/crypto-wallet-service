@@ -109,7 +109,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 | Orchestration | **Kubernetes**, **Kustomize** | Base manifests in `k8s/components`, plus a CI overlay for Kind |
 | GitOps | **ArgoCD** (App-of-Apps + ApplicationSet) | Continuous reconciliation from `main` with `selfHeal` + `prune` |
 | Secrets | **HashiCorp Vault** + **External Secrets Operator** | Vault KV v2 with Kubernetes auth and one scoped role per consumer, configured by Terraform (`terraform/vault-config`) |
-| Policy | **Kyverno** | `require-resource-limits` ClusterPolicy in **Enforce** mode |
+| Policy | **Kyverno** | `require-resource-limits` and `require-pod-security` ClusterPolicies in **Enforce** mode |
 | Network isolation | **NetworkPolicy** + **AWS VPC CNI** network policy agent | Default-deny ingress in `crypto-wallet-app`, one allow rule per hop of the request path |
 | Ingress | **ingress-nginx** | Host-based L7 routing for `wallet`, `argocd`, `grafana` and `vault` `.local` |
 | Autoscaling | **HPA** + **metrics-server** | CPU-based scaling for all three services |
@@ -623,6 +623,14 @@ Running agents in-cluster is on the
   table.
 - **Admission control.** Kyverno runs in Enforce mode, and every
   `kubeconform` and `helm template` check runs on each PR.
+- **Non-root, unprivileged containers.** Every app container, Postgres and
+  kafka-exporter runs as a non-root uid with no privilege escalation, ALL
+  capabilities dropped, a read-only root filesystem and the `RuntimeDefault`
+  seccomp profile. Kyverno's `require-pod-security` rejects Pods that run as
+  root, escalate, keep capabilities or use host namespaces, outside
+  `kube-system`, `argocd`, `kyverno` and `monitoring`. node-exporter's
+  `hostPID`/`hostNetwork` is the one accepted exception
+  ([architecture.md §6](architecture.md#6-policy-layer-kyverno-and-networkpolicies)).
 - **Network isolation.** `crypto-wallet-app` is default-deny for ingress
   (`k8s/components/network-policies.yaml`). Only these hops are allowed:
   ingress-nginx → frontend, frontend → wallet/order-service, and

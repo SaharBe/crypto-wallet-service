@@ -13,9 +13,10 @@ metadata:
       without host namespaces or privileged mode. Rules follow Kyverno's
       Pod Security Standards "restricted" sample policies (PLAT-512).
 spec:
-  # Rolled out in Audit first (PLAT-512): PolicyReports showed what still
-  # failed before switching to Enforce.
-  validationFailureAction: Audit
+  # Rolled out in Audit first (PLAT-512): PolicyReports showed no remaining
+  # failures in crypto-wallet-app, kafka (Bitnami broker + kafka-exporter),
+  # ingress-nginx, external-secrets or vault before this was switched.
+  validationFailureAction: Enforce
   # true, unlike require-resource-limits: background scans are what write
   # PolicyReports for Pods that already exist, which is how the Audit phase
   # is checked (`kubectl get policyreport -A`). None of the rules read

@@ -26,7 +26,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/frontend:93cbdbae54893f30a568582f57bbc59f266b5fe7
+          image: 079000477935.dkr.ecr.us-east-1.amazonaws.com/frontend:7e0b453c1bfe7fcda5f84d8f7894b50147d87229
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

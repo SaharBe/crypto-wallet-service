@@ -201,15 +201,17 @@ they push instead: Prometheus has its remote-write receiver enabled
   ```bash
   kubectl port-forward svc/monitoring-stack-kube-prom-prometheus 9090:9090 -n monitoring &
   K6_PROMETHEUS_RW_SERVER_URL=http://localhost:9090/api/v1/write \
-  K6_PROMETHEUS_RW_TREND_STATS='p(95),p(99),avg,max' \
+  K6_PROMETHEUS_RW_TREND_STATS='p(95),p(99),avg' \
   BASE_URL=http://localhost:8080 \
     k6 run -o experimental-prometheus-rw --tag testid=local-$(date +%s) tests/performance/load-test.js
   ```
 
 `K6_PROMETHEUS_RW_TREND_STATS` matters: Trend metrics are only sent as the
-stats listed there, as `k6_<metric>_p95` / `_p99` / `_avg` / `_max` (in
-seconds), which is what the dashboard queries. It defaults to `p(99)`
-only, so without it the p95/avg panels stay empty.
+stats listed there, as `k6_<metric>_p95` / `_p99` / `_avg` (in seconds),
+which is what the dashboard queries. It defaults to `p(99)` only, so
+without it the p95/avg panels stay empty. Don't add stats the dashboard
+doesn't use: each one is another series per metric and tag set in
+Prometheus's in-memory head block.
 
 k6's own end-of-run summary remains the pass/fail source of truth for the
 thresholds; the dashboard is for seeing *why* — which endpoint degraded,

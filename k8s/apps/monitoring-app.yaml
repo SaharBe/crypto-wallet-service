@@ -51,6 +51,24 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+        # PLAT-520: Prometheus was OOMKilled at 512Mi in a loop, even with no
+        # k6 run. 184k of its 214k head series came from the EKS apiserver,
+        # mostly histogram buckets that no recording rule, alert or bundled
+        # dashboard reads (checked against this chart version's
+        # templates/prometheus/rules-1.14 and grafana/dashboards-1.14).
+        # Dropping those ~104k series is the fix; the _sum/_count series stay,
+        # so averages are still available. Kept: the apiserver_request_sli_*
+        # buckets (API server SLO/burn-rate rules and dashboard) and
+        # workqueue_*. This list replaces the chart default (Helm doesn't merge
+        # lists); the default only dropped some `le` values of
+        # apiserver_request_duration_seconds_bucket, which is dropped whole here.
+        kubeApiServer:
+          serviceMonitor:
+            metricRelabelings:
+              - sourceLabels: [__name__]
+                action: drop
+                regex: >-
+                  (etcd_request_duration_seconds|apiserver_request_duration_seconds|apiserver_request_body_size_bytes|apiserver_watch_list_duration_seconds|apiserver_watch_cache_read_wait_seconds|apiserver_storage_list_duration_seconds|apiserver_response_sizes|apiserver_watch_events_sizes)_bucket
         prometheus:
           prometheusSpec:
             # Lets k6 push its metrics (k6_vus, k6_http_req_duration_*,
@@ -62,13 +80,17 @@ spec:
             # (or port-forwarded) writers only.
             enableRemoteWriteReceiver: true
             retention: 2d
+            # Sized after the relabeling above (PLAT-520). The request matches
+            # steady-state usage so the scheduler accounts for it; the limit
+            # leaves room for in-cluster k6 runs, which remote-write a burst
+            # of new series (tests/performance/run-in-cluster.sh).
             resources:
               requests:
                 cpu: 100m
-                memory: 256Mi
+                memory: 512Mi
               limits:
                 cpu: 500m
-                memory: 512Mi
+                memory: 1Gi
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: monitoring

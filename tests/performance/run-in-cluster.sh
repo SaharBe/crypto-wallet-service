@@ -30,7 +30,11 @@ K6_ENV='{"name": "BASE_URL", "value": "'"$BASE_URL"'"}'
 if [ -n "$PROM_RW_URL" ]; then
   K6_ARGS+=', "-o", "experimental-prometheus-rw", "--tag", "testid='"$POD_NAME"'"'
   K6_ENV+=', {"name": "K6_PROMETHEUS_RW_SERVER_URL", "value": "'"$PROM_RW_URL"'"}'
-  K6_ENV+=', {"name": "K6_PROMETHEUS_RW_TREND_STATS", "value": "p(95),p(99),avg,max"}'
+  # Each stat listed here is a separate series per Trend metric x tag set
+  # (method, url, status, scenario, ...), so list only what the dashboard
+  # queries: p95/p99/avg. `max` was unused and only added Prometheus head
+  # series (PLAT-520: Prometheus OOMKilled after in-cluster runs).
+  K6_ENV+=', {"name": "K6_PROMETHEUS_RW_TREND_STATS", "value": "p(95),p(99),avg"}'
   echo "📈 Pushing metrics to $PROM_RW_URL (testid=$POD_NAME)"
 fi
 

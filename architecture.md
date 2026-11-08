@@ -265,8 +265,9 @@ metrics from these sources:
 | Source | What it provides | How it's collected |
 |---|---|---|
 | kube-state-metrics, node-exporter, kubelet/cAdvisor | Pod, Deployment, HPA, node CPU/memory, restarts, OOMKills | Chart defaults |
+| Kubernetes API server (EKS) | Request rates, errors, the API server SLO/burn-rate rules | Chart default `ServiceMonitor`. Histogram buckets that no rule or dashboard reads are dropped at scrape time (`metricRelabelings` in `k8s/apps/monitoring-app.yaml`); they were ~half of all series and kept Prometheus OOMKilled |
 | **kafka-exporter** (`k8s/apps/kafka/`) | Topic offsets and consumer-group lag for `wallet-group` | `ServiceMonitor` |
-| **k6** load tests | Request rate, latency (p95, p99, avg, max), error rate and checks, labelled by `testid` | Prometheus **remote-write receiver** (`enableRemoteWriteReceiver: true`). The in-cluster k6 Pod pushes directly to it |
+| **k6** load tests | Request rate, latency (p95, p99, avg), error rate and checks, labelled by `testid` | Prometheus **remote-write receiver** (`enableRemoteWriteReceiver: true`). The in-cluster k6 Pod pushes directly to it |
 
 **Dashboards** are plain JSON in `k8s/apps/monitoring/dashboards/`. A
 `configMapGenerator` labelled `grafana_dashboard: "1"` turns them into
@@ -419,5 +420,6 @@ simplicity. Each would change for a production deployment:
 | Node networking | VPC-CNI without prefix delegation (17 pods/node) | Enable prefix delegation, or use larger/more nodes + Cluster Autoscaler/Karpenter |
 | Graceful shutdown | `node` runs as PID 1 with no SIGTERM handler, so pods are SIGKILLed after the 30 s grace period ([Resilience Experiments](README.md#resilience-experiments)) | SIGTERM handler that drains HTTP and disconnects Kafka clients, or an init (`tini`) |
 | Kafka consumer delivery | At-least-once: transient DB errors are retried in place and the offset is committed only after the order is applied (PLAT-506). Unprocessable messages are skipped with a log line. The topic is created at runtime by `wallet-service` | Idempotent balance updates keyed by an order id (PLAT-510); topics declared in git plus a DLQ for skipped messages (PLAT-511) |
+| Metrics storage | One Prometheus replica on an `emptyDir` (history is lost when the Pod is recreated), 2-day retention; unused apiserver histogram buckets dropped to fit its memory limit (PLAT-520) | EBS-backed storage or Amazon Managed Service for Prometheus (remote-write), HA pair, per-target `sampleLimit` and an alert on head-series growth |
 | Tracing | Metrics only | OpenTelemetry auto-instrumentation, trace context in Kafka headers, Jaeger/Tempo (PLAT-503) |
 | AI-assisted ops | Out-of-cluster: Claude Code → Radar MCP with a read-only ServiceAccount (PLAT-504); triage skills (PLAT-505) | kagent `Agent` CRDs via ArgoCD, LLM key via Vault → ESO, read-only RBAC, PR-only changes |

@@ -597,6 +597,27 @@ was asked about two failures by symptom alone.
 
 Both were correct, in about 40 s and 5 Radar calls each.
 
+### Triage skills
+
+Platform knowledge for the common incidents is kept as Claude Code
+[project skills](https://docs.claude.com/en/docs/claude-code/skills) in
+[`.claude/skills/`](.claude/skills) (PLAT-505). Claude loads a skill only
+when the symptom matches its description, so it doesn't sit in context
+otherwise. Each skill gives a check order, the repo-specific facts behind
+it, and a fix that goes through a PR:
+
+| Skill | Use it for |
+|---|---|
+| [`pod-not-ready-triage`](.claude/skills/pod-not-ready-triage/SKILL.md) | Missing, Pending, crash-looping or not-Ready pods: Kyverno admission, the 17 pods/node ceiling, ExternalSecret sync, ECR pulls, probes, default-deny NetworkPolicy |
+| [`kafka-lag-triage`](.claude/skills/kafka-lag-triage/SKILL.md) | `wallet-group` lag on `crypto-orders`: consumer at 0 replicas, Postgres retries blocking a partition, broker health, skipped orders |
+| [`argocd-out-of-sync`](.claude/skills/argocd-out-of-sync/SKILL.md) | `Unknown`/`OutOfSync`/stuck Applications: `ComparisonError`, `ignoreDifferences`, sync waves, `selfHeal` reverts |
+| [`vault-eso-secrets`](.claude/skills/vault-eso-secrets/SKILL.md) | ExternalSecret → ClusterSecretStore → Vault role → policy chain, 403s, Vault dev-mode restarts |
+
+Just describe the symptom (`claude`, from the repo root). You don't have to
+name the skill, and `/<skill-name>` forces one. The skills read through Radar
+first, never print secret values, and list every live action (scaling,
+`make vault-init`, `argocd app sync`) as a step that needs your approval.
+
 **Known gaps:** Radar finds Prometheus by port-forwarding to it, which this
 identity can't do, so metrics tools return nothing by default. To give the
 agent metrics, port-forward Prometheus with your own identity
@@ -665,7 +686,7 @@ table, including Kafka, CI auth and supply chain, is in
 | **Vault dev mode** | `server.dev.enabled: true` (`k8s/apps/vault.yaml`): in-memory storage, auto-unsealed, root token. `make vault-init` re-seeds it from `terraform/vault-config` after a restart | Simplicity. No init/unseal ceremony and no key custody, and all config is Terraform, so a restart is one command | 3-replica HA with Raft integrated storage, `seal "awskms"` auto-unseal through IRSA, recovery keys held outside the cluster, root token revoked after bootstrap, TLS, audit device, Raft snapshots to S3 |
 | **TLS / HTTPS** | HTTP on `*.local` through `make ingress-forward`. ingress-nginx is `ClusterIP`; the Ingresses in `k8s/apps/ingress/` have no `tls:` block | Cost of an NLB and a domain. Exposing ArgoCD, Vault and Grafana publicly would widen the attack surface for no user benefit | Route53 hosted zone + ExternalDNS, ingress-nginx behind an NLB, cert-manager with a Let's Encrypt `ClusterIssuer` using DNS-01 on Route53 through IRSA. Admin UIs stay internal (internal NLB/VPN or SSO). Alternative: terminate TLS at the NLB with ACM |
 | **Distributed tracing** | Metrics only (Prometheus, kafka-exporter, k6 remote-write) | Metrics and alerts cover most of the value for two services, and every extra pod counts against the ceiling | PLAT-503: OpenTelemetry Node.js auto-instrumentation (HTTP, Express, pg), `traceparent` propagated in Kafka message headers, Jaeger (or Tempo) through ArgoCD with limits and a NetworkPolicy allow rule for OTLP |
-| **In-cluster AI agents** | AI-assisted ops runs on the operator's laptop: Claude Code → Radar MCP with a read-only ServiceAccount ([AI-Assisted Operations](#ai-assisted-operations), PLAT-504). Triage skills: PLAT-505 | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
+| **In-cluster AI agents** | AI-assisted ops runs on the operator's laptop: Claude Code → Radar MCP with a read-only ServiceAccount ([AI-Assisted Operations](#ai-assisted-operations), PLAT-504). Triage runbooks as project skills in `.claude/skills/` ([Triage skills](#triage-skills), PLAT-505) | Capacity (controller + agent pods) and LLM cost. The agent's value gets proven read-only first | [kagent](https://kagent.dev/) (CNCF Sandbox) through ArgoCD. `Agent` CRDs per triage runbook, the LLM API key from Vault → ESO, read-only RBAC per agent (no `secrets`, no `exec`), Kyverno limits and NetworkPolicies apply, and fixes land as PRs only |
 
 Gaps found by the [resilience experiments](#resilience-experiments) are
 tracked the same way: graceful shutdown (PLAT-507), a consumer stuck at

@@ -28,7 +28,7 @@ Kind in CI).
 | Services | `wallet-service`, `order-service` (Node.js), `frontend` (nginx) | `services/` |
 | Performance | k6 (local or ephemeral in-cluster Pod, metrics → Prometheus remote-write) | `tests/performance/` |
 | CI/CD | `pr-checks.yml` (PR gate), `ci.yml` (build → ECR → pin image tags on `main`) | `.github/workflows/` |
-| AI-assisted ops | Radar (local) MCP server, read-only `ai-readonly` ServiceAccount | `.mcp.json`, `k8s/apps/ai-ops/`, `scripts/ai-kubeconfig.sh` |
+| AI-assisted ops | Radar (local) MCP server, read-only `ai-readonly` ServiceAccount, incident-triage skills | `.mcp.json`, `k8s/apps/ai-ops/`, `scripts/ai-kubeconfig.sh`, `.claude/skills/` |
 
 Further reading: [README.md](README.md), [architecture.md](architecture.md),
 [tests/performance/README.md](tests/performance/README.md),
@@ -321,6 +321,12 @@ the preferred way to **read** cluster state: issues, events, logs,
 NetworkPolicy reachability. It can't write, by design. Never point Radar at
 `~/.kube/config`, and never widen `k8s/apps/ai-ops/rbac.yaml` (secrets,
 write verbs, exec/proxy) to make a diagnosis easier.
+
+For incident triage, load the matching project skill in `.claude/skills/`
+(`pod-not-ready-triage`, `kafka-lag-triage`, `argocd-out-of-sync`,
+`vault-eso-secrets`). When a skill and this file disagree, this file wins;
+fix the skill in the same PR. Keep skills free of secret values, and
+gate every mutating command in them behind an explicit ask-first step.
 
 ### 4.6 Platform lifecycle (confirm with the user first)
 

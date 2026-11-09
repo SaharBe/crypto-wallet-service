@@ -2,11 +2,13 @@
 name: pod-not-ready-triage
 description: >-
   Triage a workload in this cluster that is missing, Pending, CrashLoopBackOff,
-  ImagePullBackOff, or Running but not Ready (mostly crypto-wallet-app:
-  frontend, order-service, wallet-service, postgres-db; also kafka-exporter).
-  Use when someone says a Deployment "doesn't show up", pods are stuck,
-  restarting, not Ready, or "Too many pods". Walks the platform-specific check
-  order: events, Kyverno admission, ExternalSecret sync, NetworkPolicy,
+  ImagePullBackOff, Running but not Ready, or Ready but unreachable from
+  another pod (mostly crypto-wallet-app: frontend, order-service,
+  wallet-service, postgres-db; also kafka-exporter). Use when someone says a
+  Deployment "doesn't show up", pods are stuck, restarting, not Ready, "Too
+  many pods", or a pod "cannot reach" a Service / gets connection timeouts
+  while the target looks healthy. Walks the platform-specific check order:
+  events, Kyverno admission, ExternalSecret sync, NetworkPolicy default-deny,
   17-pods-per-node ceiling, ECR image pull.
 ---
 
@@ -14,7 +16,10 @@ description: >-
 
 Use this when a workload doesn't run, or runs without becoming Ready. Diagnose
 read-only, name the root cause with evidence, and propose a fix that goes
-through git. Don't change the live cluster: ArgoCD `selfHeal` reverts it.
+through git. Don't change the live cluster. ArgoCD `selfHeal` reverts edits
+to the objects it manages. An object created by hand isn't tracked, so ArgoCD
+leaves it alone, but it isn't in git either: it gets lost on the next rebuild
+and is invisible to review.
 
 ## Tools, in order of preference
 
@@ -142,7 +147,9 @@ k6-load-generator --8080--> frontend
 A caller missing from this list times out (no RST). Radar: `diagnose` with
 `kind: service, probe: true`, then `get_resource` on the policies. **Fix:**
 add one allow rule (source selector + port) to `network-policies.yaml` through
-a PR. Never an allow-all or a namespace-wide rule.
+a PR. Select only the target that's actually called: don't append the new
+source to `allow-frontend-to-backends`, because it selects **both** backends and
+would also open order-service. Never an allow-all or a namespace-wide rule.
 
 ## Finish
 

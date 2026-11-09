@@ -25,7 +25,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/SaharBe/crypto-wallet-service.git
+    repoURL: '${REPO_URL}'
     targetRevision: HEAD
     path: k8s/apps/ingress
   destination:

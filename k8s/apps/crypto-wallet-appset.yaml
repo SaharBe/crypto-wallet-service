@@ -63,7 +63,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: 'https://github.com/SaharBe/crypto-wallet-service.git'
+        repoURL: '${REPO_URL}'
         targetRevision: HEAD
         path: '{{ .path }}'
       destination:

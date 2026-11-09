@@ -17,9 +17,10 @@
 # file's header for the full story.
 #
 # ArgoCD syncs k8s/apps/ straight from git, so there's no `envsubst` step in
-# this path (unlike k8s/root-app.yaml). The ApplicationSet template IS the
-# single source of truth for these; keep it in sync with the REPO_URL in
-# secrets.env.
+# this path (unlike k8s/root-app.yaml). A `${REPO_URL}` placeholder here is
+# passed to ArgoCD as a literal string, so the URL has to be spelled out
+# (PLAT-524). The ApplicationSet template IS the single source of truth for
+# these; keep it in sync with the REPO_URL in secrets.env.
 #
 # syncOptions are unified to the superset the apps need:
 #   - CreateNamespace=true           monitoring namespace (no-op for the
@@ -63,7 +64,9 @@ spec:
     spec:
       project: default
       source:
-        repoURL: '${REPO_URL}'
+        # Literal on purpose, not '${REPO_URL}': nothing substitutes
+        # variables in k8s/apps/ (see the header above and PLAT-524).
+        repoURL: 'https://github.com/SaharBe/crypto-wallet-service.git'
         targetRevision: HEAD
         path: '{{ .path }}'
       destination:

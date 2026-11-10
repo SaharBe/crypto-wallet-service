@@ -294,6 +294,27 @@ wait_for_application() {
   wait_for_application_healthy "$1" "${3:-300}"
 }
 
+# restart_deployments <namespace> [deployment...]
+# Restarts the named Deployments, or all of them in the namespace when none
+# are named. Skips quietly if they don't exist yet (ArgoCD may still be
+# syncing); any other failure prints a warning but doesn't stop the bootstrap.
+restart_deployments() {
+  local ns=$1
+  shift
+  local targets
+  if ! targets=$(kubectl get deployment -n "$ns" "$@" -o name --ignore-not-found); then
+    echo "⚠️  Could not list Deployments in $ns (see error above); skipping restart."
+    return 0
+  fi
+  if [ -z "$targets" ]; then
+    echo "ℹ️  No Deployments to restart in $ns yet; skipping."
+    return 0
+  fi
+  # shellcheck disable=SC2086  # one deployment.apps/<name> per line, split on purpose
+  kubectl rollout restart -n "$ns" $targets ||
+    echo "⚠️  kubectl rollout restart failed in $ns (see error above); continuing."
+}
+
 echo -e "\n🔹 Step 6: Waiting for Vault to become Synced/Healthy..."
 # Vault alone, ahead of external-secrets/kafka: those two are unrelated to
 # Vault and would only add avoidable delay before Step 7 can configure
@@ -337,13 +358,14 @@ for app in "crypto-wallet-app" "monitoring-stack"; do
 
   # Restart the app's Deployments once its Application object exists, so
   # pods that came up before ESO synced their secret pick it up now rather
-  # than waiting on kubelet's own retry timing. Namespace/deployment name
-  # may still not exist yet even after the Application resource does (its
-  # own sync could still be in flight), hence || true.
+  # than waiting on kubelet's own retry timing. The namespace or Deployment
+  # may not exist yet even after the Application does (its own sync could
+  # still be in flight); restart_deployments skips that case and warns on
+  # anything else.
   if [ "$app" = "crypto-wallet-app" ]; then
-    kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
+    restart_deployments crypto-wallet-app
   else
-    kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
+    restart_deployments monitoring monitoring-stack-grafana
   fi
 
   wait_for_application_healthy "$app"

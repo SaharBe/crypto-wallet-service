@@ -295,40 +295,24 @@ wait_for_application() {
 }
 
 # restart_deployments <namespace> [deployment...]
-# Restarts the named Deployments, or every Deployment in the namespace when
-# none are named. Never fails the bootstrap, but only stays quiet when there
-# is nothing to restart yet (namespace or Deployment not created by ArgoCD's
-# sync so far). Every other error is printed with a ⚠️ line. A blanket
-# `2>/dev/null || true` here once hid an invalid `--all` flag, so this
-# restart never ran at all (PLAT-516).
+# Restarts the named Deployments, or all of them in the namespace when none
+# are named. Skips quietly if they don't exist yet (ArgoCD may still be
+# syncing); any other failure prints a warning but doesn't stop the bootstrap.
 restart_deployments() {
   local ns=$1
   shift
-  local targets err_file
-  err_file=$(mktemp)
-  if ! targets=$(kubectl get deployment -n "$ns" "$@" -o name 2>"$err_file"); then
-    if grep -q '(NotFound)' "$err_file"; then
-      echo "ℹ️  Deployment(s) $* not created yet in $ns; skipping restart."
-    else
-      echo "⚠️  Could not list Deployments in $ns, skipping restart: $(cat "$err_file")"
-    fi
-    rm -f "$err_file"
+  local targets
+  if ! targets=$(kubectl get deployment -n "$ns" "$@" -o name --ignore-not-found); then
+    echo "⚠️  Could not list Deployments in $ns (see error above); skipping restart."
     return 0
   fi
-  rm -f "$err_file"
-
-  # Listing every Deployment in a missing namespace exits 0 with no output.
   if [ -z "$targets" ]; then
-    echo "ℹ️  No Deployments in $ns yet; skipping restart."
+    echo "ℹ️  No Deployments to restart in $ns yet; skipping."
     return 0
   fi
-
-  # $targets is a newline-separated list of deployment.apps/<name>, split on purpose.
-  # shellcheck disable=SC2086
-  if ! kubectl rollout restart -n "$ns" $targets; then
-    echo "⚠️  kubectl rollout restart failed in $ns (error above). Continuing: pods still pick up" \
-      "the secret on kubelet's own CreateContainerConfigError retry, just more slowly."
-  fi
+  # shellcheck disable=SC2086  # one deployment.apps/<name> per line, split on purpose
+  kubectl rollout restart -n "$ns" $targets ||
+    echo "⚠️  kubectl rollout restart failed in $ns (see error above); continuing."
 }
 
 echo -e "\n🔹 Step 6: Waiting for Vault to become Synced/Healthy..."

@@ -294,6 +294,43 @@ wait_for_application() {
   wait_for_application_healthy "$1" "${3:-300}"
 }
 
+# restart_deployments <namespace> [deployment...]
+# Restarts the named Deployments, or every Deployment in the namespace when
+# none are named. Never fails the bootstrap, but only stays quiet when there
+# is nothing to restart yet (namespace or Deployment not created by ArgoCD's
+# sync so far). Every other error is printed with a ⚠️ line. A blanket
+# `2>/dev/null || true` here once hid an invalid `--all` flag, so this
+# restart never ran at all (PLAT-516).
+restart_deployments() {
+  local ns=$1
+  shift
+  local targets err_file
+  err_file=$(mktemp)
+  if ! targets=$(kubectl get deployment -n "$ns" "$@" -o name 2>"$err_file"); then
+    if grep -q '(NotFound)' "$err_file"; then
+      echo "ℹ️  Deployment(s) $* not created yet in $ns; skipping restart."
+    else
+      echo "⚠️  Could not list Deployments in $ns, skipping restart: $(cat "$err_file")"
+    fi
+    rm -f "$err_file"
+    return 0
+  fi
+  rm -f "$err_file"
+
+  # Listing every Deployment in a missing namespace exits 0 with no output.
+  if [ -z "$targets" ]; then
+    echo "ℹ️  No Deployments in $ns yet; skipping restart."
+    return 0
+  fi
+
+  # $targets is a newline-separated list of deployment.apps/<name>, split on purpose.
+  # shellcheck disable=SC2086
+  if ! kubectl rollout restart -n "$ns" $targets; then
+    echo "⚠️  kubectl rollout restart failed in $ns (error above). Continuing: pods still pick up" \
+      "the secret on kubelet's own CreateContainerConfigError retry, just more slowly."
+  fi
+}
+
 echo -e "\n🔹 Step 6: Waiting for Vault to become Synced/Healthy..."
 # Vault alone, ahead of external-secrets/kafka: those two are unrelated to
 # Vault and would only add avoidable delay before Step 7 can configure
@@ -337,13 +374,14 @@ for app in "crypto-wallet-app" "monitoring-stack"; do
 
   # Restart the app's Deployments once its Application object exists, so
   # pods that came up before ESO synced their secret pick it up now rather
-  # than waiting on kubelet's own retry timing. Namespace/deployment name
-  # may still not exist yet even after the Application resource does (its
-  # own sync could still be in flight), hence || true.
+  # than waiting on kubelet's own retry timing. The namespace or Deployment
+  # may not exist yet even after the Application does (its own sync could
+  # still be in flight); restart_deployments skips that case and warns on
+  # anything else.
   if [ "$app" = "crypto-wallet-app" ]; then
-    kubectl rollout restart deployment -n crypto-wallet-app --all 2>/dev/null || true
+    restart_deployments crypto-wallet-app
   else
-    kubectl rollout restart deployment -n monitoring monitoring-stack-grafana 2>/dev/null || true
+    restart_deployments monitoring monitoring-stack-grafana
   fi
 
   wait_for_application_healthy "$app"

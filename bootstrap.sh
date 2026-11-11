@@ -22,18 +22,22 @@ if ! command -v envsubst >/dev/null 2>&1; then
   echo "❌ envsubst not found. Install the 'gettext' package (provides envsubst)."
   exit 1
 fi
+# ArgoCD release installed in Step 3. Pinned to an exact release tag rather than
+# a moving branch, so every `make up` installs the same ArgoCD (and the
+# same Application/ApplicationSet CRDs) and a new upstream release can't change
+# the platform mid-bootstrap. To upgrade, follow "Upgrading ArgoCD" in
+# architecture.md: bump this in a PR, read the release notes, validate on a
+# fresh `make up`.
+ARGOCD_VERSION="v3.6.1"
+ARGOCD_MANIFESTS_URL="https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests"
+# Docs for the same release line (v3.6.1 -> release-3.6), not the moving default docs.
+ARGOCD_DOCS_URL="https://argo-cd.readthedocs.io/en/release-$(echo "${ARGOCD_VERSION#v}" | cut -d. -f1,2)"
+
 if ! command -v argocd >/dev/null 2>&1; then
-  echo "❌ argocd CLI not found. Install it (https://argo-cd.readthedocs.io/en/stable/cli_installation/) —"
+  echo "❌ argocd CLI not found. Install it (${ARGOCD_DOCS_URL}/cli_installation/) —"
   echo "   Step 3 uses it to hash ARGOCD_ADMIN_PASSWORD and to verify the admin login actually works."
   exit 1
 fi
-
-# ArgoCD release installed in Step 3. Pinned to an exact tag rather than the
-# moving `stable` branch, so every `make up` installs the same ArgoCD (and the
-# same Application/ApplicationSet CRDs) and a new upstream release can't change
-# the platform mid-bootstrap. Upgrade deliberately by bumping this in a PR.
-ARGOCD_VERSION="v3.6.1"
-ARGOCD_MANIFESTS_URL="https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests"
 
 export TF_VAR_vault_token="$VAULT_TOKEN"
 export TF_VAR_db_username="$DB_USERNAME"
@@ -96,11 +100,16 @@ echo "✅ Initial images are live in ECR!"
 echo -e "\n🔹 Step 3: Installing ArgoCD ${ARGOCD_VERSION}..."
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
-# Install ApplicationSet CRDs first to prevent argocd-applicationset-controller CrashLoop (using server-side apply to avoid size limit issues)
-kubectl apply --server-side -n argocd -f "${ARGOCD_MANIFESTS_URL}/crds/applicationset-crd.yaml"
-
-# Apply main ArgoCD manifests
-kubectl apply -n argocd -f "${ARGOCD_MANIFESTS_URL}/install.yaml" || true
+# Server-side apply, as upstream recommends: install.yaml embeds the
+# ApplicationSet CRD (~425 KB), and client-side apply always fails on it because
+# its last-applied-configuration annotation exceeds the 262144-byte limit. That
+# failure used to be swallowed with `|| true` (plus a separate SSA step for the
+# CRD), which also hid real errors such as a wrong ARGOCD_VERSION (404) and left
+# the wait loop below spinning forever. Now any failure stops the bootstrap here.
+# --force-conflicts takes field ownership from the old client-side install on
+# re-runs; fields bootstrap patches later (server.insecure, admin.password)
+# aren't in install.yaml, so they survive a re-run.
+kubectl apply --server-side --force-conflicts -n argocd -f "${ARGOCD_MANIFESTS_URL}/install.yaml"
 
 echo "⌛ Waiting for the ArgoCD API server to become Ready..."
 until kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server 2>&1 | grep -q -v "No resources found"; do

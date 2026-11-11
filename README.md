@@ -260,7 +260,7 @@ Kyverno or Prometheus/Grafana locally.
    `bootstrap.sh` takes these steps:
    1. Provisions VPC, EKS, ECR and the EBS CSI driver with Terraform.
    2. Builds the first service images and pushes them to ECR.
-   3. Installs ArgoCD and sets the admin password.
+   3. Installs ArgoCD (pinned via `ARGOCD_VERSION` in `bootstrap.sh`) and sets the admin password.
    4. Seeds the one bootstrap repo credential and applies the App-of-Apps.
    5. Runs `make vault-init` as soon as Vault is healthy.
    6. Waits for every Application to become Synced/Healthy.

@@ -28,6 +28,13 @@ if ! command -v argocd >/dev/null 2>&1; then
   exit 1
 fi
 
+# ArgoCD release installed in Step 3. Pinned to an exact tag rather than the
+# moving `stable` branch, so every `make up` installs the same ArgoCD (and the
+# same Application/ApplicationSet CRDs) and a new upstream release can't change
+# the platform mid-bootstrap. Upgrade deliberately by bumping this in a PR.
+ARGOCD_VERSION="v3.6.1"
+ARGOCD_MANIFESTS_URL="https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests"
+
 export TF_VAR_vault_token="$VAULT_TOKEN"
 export TF_VAR_db_username="$DB_USERNAME"
 export TF_VAR_db_password="$DB_PASSWORD"
@@ -86,14 +93,14 @@ done
 
 echo "✅ Initial images are live in ECR!"
 
-echo -e "\n🔹 Step 3: Installing ArgoCD..."
+echo -e "\n🔹 Step 3: Installing ArgoCD ${ARGOCD_VERSION}..."
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
 # Install ApplicationSet CRDs first to prevent argocd-applicationset-controller CrashLoop (using server-side apply to avoid size limit issues)
-kubectl apply --server-side -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+kubectl apply --server-side -n argocd -f "${ARGOCD_MANIFESTS_URL}/crds/applicationset-crd.yaml"
 
 # Apply main ArgoCD manifests
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml || true
+kubectl apply -n argocd -f "${ARGOCD_MANIFESTS_URL}/install.yaml" || true
 
 echo "⌛ Waiting for the ArgoCD API server to become Ready..."
 until kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server 2>&1 | grep -q -v "No resources found"; do

@@ -102,6 +102,9 @@ Run the same checks CI runs (Section 4.1). All must pass:
 - Pin images to immutable tags, never `:latest`, for anything ArgoCD deploys.
   Don't hand-edit the ECR image tags in `k8s/components/{wallet-service,order-service,frontend}.yaml`;
   `ci.yml` owns them.
+- ArgoCD itself is pinned by `ARGOCD_VERSION` in `bootstrap.sh` (an exact tag,
+  never `stable`). Bump it only in a PR, following "Upgrading ArgoCD" in
+  architecture.md.
 - HPAs own `spec.replicas` for `wallet-service`, `order-service` and `frontend`
   (ignored in the ApplicationSet's `ignoreDifferences`). Tune scaling in
   `k8s/components/hpa.yaml`, not via Deployment replica counts.

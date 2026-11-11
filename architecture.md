@@ -95,8 +95,9 @@ it is a known part of the environment's design.
 
 ## 4. Delivery layer: ArgoCD GitOps
 
-`bootstrap.sh` installs ArgoCD and applies exactly one manifest by hand:
-`k8s/root-app.yaml`. Everything else is reconciled from git.
+`bootstrap.sh` installs a pinned ArgoCD release (`ARGOCD_VERSION`) and applies
+exactly one manifest by hand: `k8s/root-app.yaml`. Everything else is
+reconciled from git. See [Upgrading ArgoCD](#upgrading-argocd) below.
 
 ```mermaid
 flowchart LR
@@ -145,6 +146,30 @@ repository before Vault exists. `bootstrap.sh` seeds that credential once,
 by hand. After that, `k8s/apps/argocd-repo-secret.yaml` has ESO take over
 the same Secret from Vault, so the credential is managed in git like
 everything else.
+
+### Upgrading ArgoCD
+
+ArgoCD is the one component installed outside GitOps (it can't deploy
+itself before it exists), so its version is pinned in `bootstrap.sh`
+instead of an Application. `ARGOCD_VERSION` is an exact release tag, never
+the moving `stable` branch. Otherwise each `make up` could install a
+different ArgoCD with no trace in git, and diff/sync behaviour changes
+between releases. Step 3 installs `install.yaml` for that tag with
+server-side apply. Any failure, including a tag that doesn't exist, stops
+the bootstrap.
+
+To upgrade:
+
+1. Bump `ARGOCD_VERSION` in `bootstrap.sh` on a `fix/` or `feat/` branch.
+2. Read the [release notes](https://github.com/argoproj/argo-cd/releases)
+   for every version in between, plus the upstream upgrade guide for any
+   minor or major jump. Look for diff/sync, hook and CRD changes.
+3. Validate on a fresh `make up`: the `argocd-server` image shows the new
+   tag, all 11 steps complete, and every Application is Synced/Healthy.
+4. A running cluster doesn't pick up the change from git. Upgrade it by
+   re-running Step 3's `kubectl apply --server-side --force-conflicts`
+   against the new tag (it's safe to repeat).
+5. Keep the local `argocd` CLI on the same minor version.
 
 ## 5. Secrets layer: Vault + External Secrets Operator
 

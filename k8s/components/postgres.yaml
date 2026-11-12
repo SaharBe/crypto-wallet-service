@@ -32,6 +32,8 @@ spec:
       labels:
         app: postgres
     spec:
+      # No ServiceAccount token (PLAT-521), see wallet-service.yaml.
+      automountServiceAccountToken: false
       # Non-root (PLAT-512): runs directly as the image's `postgres` user
       # (uid/gid 999) instead of starting as root and dropping to it via gosu.
       # The entrypoint supports this: it skips its root-only chown steps and

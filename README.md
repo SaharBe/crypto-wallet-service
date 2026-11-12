@@ -653,6 +653,10 @@ Running agents in-cluster is on the
   `kube-system`, `argocd`, `kyverno` and `monitoring`. node-exporter's
   `hostPID`/`hostNetwork` is the one accepted exception
   ([architecture.md §6](architecture.md#6-policy-layer-kyverno-and-networkpolicies)).
+- **No ServiceAccount tokens where they aren't needed.** The app pods,
+  Postgres and kafka-exporter never call the Kubernetes API, so they set
+  `automountServiceAccountToken: false` and get no API credential at
+  `/var/run/secrets/kubernetes.io/serviceaccount` (PLAT-521).
 - **Network isolation.** `crypto-wallet-app` is default-deny for ingress
   (`k8s/components/network-policies.yaml`). Only these hops are allowed:
   ingress-nginx → frontend, frontend → wallet/order-service, and

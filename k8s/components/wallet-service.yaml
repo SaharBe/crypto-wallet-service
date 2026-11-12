@@ -15,6 +15,12 @@ spec:
       labels:
         app: wallet-service
     spec:
+      # No ServiceAccount token (PLAT-521): this process never calls the
+      # Kubernetes API, so a mounted token would only be a ready-made API
+      # credential after an RCE. The Pod runs as the namespace's `default` SA;
+      # crypto-sa is left alone because ESO uses it through the TokenRequest
+      # API (external-secret.yaml), which doesn't depend on automount.
+      automountServiceAccountToken: false
       # Non-root (PLAT-512): the image's `node` user (uid/gid 1000, `USER node`
       # in services/wallet-service/Dockerfile), pinned here too so runAsNonRoot
       # can verify it. k8s/apps/kyverno-policies/require-pod-security.yaml

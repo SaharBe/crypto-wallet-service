@@ -15,6 +15,8 @@ spec:
       labels:
         app: frontend
     spec:
+      # No ServiceAccount token (PLAT-521), see wallet-service.yaml.
+      automountServiceAccountToken: false
       # Non-root (PLAT-512): nginx-unprivileged's `nginx` user (uid/gid 101,
       # see services/frontend/Dockerfile).
       securityContext:

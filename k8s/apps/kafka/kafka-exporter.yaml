@@ -22,6 +22,10 @@ spec:
       labels:
         app: kafka-exporter
     spec:
+      # No ServiceAccount token (PLAT-521): the exporter only talks to the
+      # Kafka broker, never the Kubernetes API (see
+      # k8s/components/wallet-service.yaml).
+      automountServiceAccountToken: false
       # Non-root (PLAT-512): the image already runs as `nobody`; pinning the
       # uid lets runAsNonRoot verify it, and busybox's nc needs no privilege
       # either.

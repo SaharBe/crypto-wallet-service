@@ -95,6 +95,10 @@ Run the same checks CI runs (Section 4.1). All must pass:
   securityContext from `k8s/components/wallet-service.yaml`, and add
   `readOnlyRootFilesystem: true` with `emptyDir` mounts for the paths the
   process writes to. Images need a non-root `USER` (see `services/*/Dockerfile`).
+- Set `automountServiceAccountToken: false` on the pod spec of any workload
+  that doesn't call the Kubernetes API (all app pods, Postgres,
+  kafka-exporter). Not enforced by Kyverno, so it's on you. Don't set it on
+  `crypto-sa`: ESO logs in to Vault with it via the TokenRequest API.
 - `crypto-wallet-app` is **default-deny for ingress**. A new workload there,
   or a new caller of an existing one, gets no traffic until you add a
   matching allow rule to `k8s/components/network-policies.yaml`. Open one

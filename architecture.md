@@ -234,7 +234,9 @@ valid.
   (`node`, uid 1000; nginx-unprivileged, uid 101). Postgres runs directly as
   uid 999 instead of dropping from root through gosu. The Deployments also
   set `readOnlyRootFilesystem` with `emptyDir` mounts for the paths each
-  process writes to, plus the `RuntimeDefault` seccomp profile. Vault's chart
+  process writes to, plus the `RuntimeDefault` seccomp profile, and
+  `automountServiceAccountToken: false`, since none of them call the
+  Kubernetes API (PLAT-521; not enforced by Kyverno). Vault's chart
   values drop ALL capabilities.
 - **Accepted exception:** node-exporter (`monitoring`) keeps `hostPID` and
   `hostNetwork`, because it reports the node's own processes, `/proc` and

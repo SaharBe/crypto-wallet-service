@@ -247,7 +247,24 @@ jobs:
       - name: Apply the wallet Ingress (wallet.local -> frontend)
         run: kubectl apply -f k8s/apps/ingress/wallet-ingress.yaml
 
+      # The version comes from the Makefile's K6_VERSION (single source of
+      # truth, shared with the Docker / in-cluster K6_IMAGE). Without
+      # k6-version the action resolves GitHub's releases/latest at run time,
+      # which is unpinned and hops between k6's parallel v1.x/v2.x lines
+      # (PLAT-528).
+      - name: Read pinned k6 version
+        id: k6
+        run: echo "version=$(make -s k6-version)" >> "$GITHUB_OUTPUT"
+
       - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ steps.k6.outputs.version }}
+
+      - name: Verify the installed k6 matches the pin
+        run: |
+          set -euo pipefail
+          k6 version
+          k6 version | grep -q "^k6 v${{ steps.k6.outputs.version }} "
 
       # BASE_URL=http://localhost hits ingress-nginx via the Kind
       # extraPortMappings above (port 80, no port-forward). HOST_HEADER

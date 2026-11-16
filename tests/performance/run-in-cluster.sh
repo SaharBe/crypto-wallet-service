@@ -18,6 +18,9 @@ fi
 
 CM_NAME="k6-scripts"
 POD_NAME="k6-$(basename "$SCRIPT" .js)-$(date +%s)"
+# Pinned k6 image (tag + digest), defined once as K6_IMAGE in the root
+# Makefile and exported to this script by `make test-load` (PLAT-528).
+K6_IMAGE="${K6_IMAGE:?K6_IMAGE is unset; run via 'make test-load K6_MODE=cluster'}"
 
 # Stream metrics into Prometheus's remote-write receiver (enabled in
 # k8s/apps/monitoring-app.yaml) so the run shows up live on the
@@ -59,7 +62,7 @@ trap cleanup EXIT
 echo "🚀 Running $SCRIPT as ephemeral Pod '$POD_NAME' against $BASE_URL..."
 kubectl run "$POD_NAME" \
   --namespace "$NAMESPACE" \
-  --image=grafana/k6:latest \
+  --image="$K6_IMAGE" \
   --restart=Never \
   --labels=app=k6-load-generator \
   --rm -i \
@@ -75,7 +78,7 @@ kubectl run "$POD_NAME" \
     },
     "containers": [{
       "name": "k6",
-      "image": "grafana/k6:latest",
+      "image": "$K6_IMAGE",
       "args": [$K6_ARGS, "/scripts/$SCRIPT"],
       "env": [$K6_ENV],
       "volumeMounts": [{"name": "scripts", "mountPath": "/scripts"}],

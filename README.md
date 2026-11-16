@@ -160,7 +160,7 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 | [`terraform`](https://developer.hashicorp.com/terraform/install) | | ✅ | Provisioning AWS infrastructure and configuring Vault |
 | [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) | | ✅ | Admin login and verification at bootstrap |
 | `envsubst` (`gettext` package) | | ✅ | Templating `k8s/root-app.yaml` at bootstrap |
-| [`k6`](https://k6.io/docs/get-started/installation/) | optional | optional | Load testing. Without it, `make test-load` falls back to the `grafana/k6` Docker image |
+| [`k6`](https://k6.io/docs/get-started/installation/) | optional | optional | Load testing. Without it, `make test-load` falls back to the `grafana/k6` Docker image. CI and in-cluster runs use the version pinned by `K6_VERSION` in the Makefile |
 | [`helm`](https://helm.sh/docs/intro/install/) | | optional | Only for running the Helm-values PR check locally. ArgoCD renders the charts itself |
 
 The cloud path provisions **billable AWS resources** (EKS control plane,

@@ -32,6 +32,17 @@ SECRETS_ENV  := secrets.env
 # that would disable it.
 K6_SCRIPT ?= load-test.js
 K6_MODE   ?= local
+# Single source of truth for the k6 version (PLAT-528). pr-checks.yml reads
+# K6_VERSION via `make -s k6-version` for grafana/setup-k6-action, and the
+# Docker fallback below plus run-in-cluster.sh (via the exported K6_IMAGE)
+# run K6_IMAGE. Unpinned, setup-k6-action resolves GitHub's releases/latest,
+# which hops between k6's parallel v1.x/v2.x lines and can be rate-limited.
+# The image is pinned by multi-arch index digest as well as tag, because
+# Docker Hub tags get rebuilt. Bump both together:
+#   docker buildx imagetools inspect grafana/k6:<version>   # top-level Digest
+K6_VERSION := 2.3.0
+K6_IMAGE   ?= grafana/k6:$(K6_VERSION)@sha256:2dd4756ec6e14e62778916e1eb850108e4b499304c02df56760fa0bdb0fba0b8
+export K6_IMAGE
 BASE_URL  ?= http://localhost:8080
 HOST_HEADER_ENV := $(if $(filter undefined,$(origin HOST_HEADER)),,HOST_HEADER="$(HOST_HEADER)")
 HOST_HEADER_ARG := $(if $(filter undefined,$(origin HOST_HEADER)),,-e HOST_HEADER="$(HOST_HEADER)")
@@ -42,7 +53,7 @@ LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +
 
 .DEFAULT_GOAL := help
 .PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password \
-	local-up local-down local-clean local-smoke local-logs ai-kubeconfig radar
+	local-up local-down local-clean local-smoke local-logs ai-kubeconfig radar k6-version
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -147,16 +158,21 @@ test-load: ## Run k6 load tests. K6_SCRIPT=load-test.js|spike-test.js|kafka-pipe
 	@if [ "$(K6_MODE)" = "cluster" ]; then \
 		./tests/performance/run-in-cluster.sh "$(K6_SCRIPT)"; \
 	elif command -v k6 >/dev/null 2>&1; then \
+		k6 version 2>/dev/null | grep -q "^k6 v$(K6_VERSION)[ +]" \
+			|| echo "⚠️  Local k6 is '$$(k6 version 2>/dev/null | head -n1)'; CI and K6_MODE=cluster pin v$(K6_VERSION), results may differ."; \
 		echo "🚀 Running $(K6_SCRIPT) locally against $(BASE_URL)..."; \
 		$(HOST_HEADER_ENV) BASE_URL="$(BASE_URL)" k6 run "tests/performance/$(K6_SCRIPT)"; \
 	else \
-		echo "🐳 k6 not found locally — running $(K6_SCRIPT) via the grafana/k6 Docker image against $(BASE_URL)..."; \
+		echo "🐳 k6 not found locally — running $(K6_SCRIPT) via the grafana/k6:$(K6_VERSION) Docker image against $(BASE_URL)..."; \
 		docker run --rm -i --network host \
 			-e BASE_URL="$(BASE_URL)" \
 			$(HOST_HEADER_ARG) \
 			-v "$$(pwd)/tests/performance:/scripts" \
-			grafana/k6:latest run "/scripts/$(K6_SCRIPT)"; \
+			"$(K6_IMAGE)" run "/scripts/$(K6_SCRIPT)"; \
 	fi
+
+k6-version: ## Print the pinned k6 version (read by pr-checks.yml for setup-k6-action)
+	@echo "$(K6_VERSION)"
 
 # ── Local docker compose stack (no AWS / Kubernetes) — see docker-compose.yml ──
 # Generated once from .env.example with a random local DB password; a file

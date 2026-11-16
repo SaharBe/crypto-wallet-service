@@ -28,11 +28,21 @@ about 30–60s to become Ready. Holding the 200ms steady-state p95 through
 that is unrealistic. The spike test checks resilience instead: zero errors,
 no restarts, and latency that degrades but stays under 800ms.
 
+## k6 version
+
+k6 is pinned in one place: `K6_VERSION` and `K6_IMAGE` (tag plus
+multi-arch digest) in the root [Makefile](../../Makefile). The CI job's
+`grafana/setup-k6-action` reads the version through `make -s k6-version`.
+The Docker fallback and the in-cluster Pod run `K6_IMAGE`. A local `k6`
+binary is used as-is, and `make test-load` prints a warning if its version
+differs from the pin. To bump k6, update both variables together (the
+Makefile comment has the digest lookup command) in a PR.
+
 ## Running
 
 ### In-cluster (use this for baseline numbers)
 
-`K6_MODE=cluster` runs each script as an ephemeral `grafana/k6` Pod in
+`K6_MODE=cluster` runs each script as an ephemeral, version-pinned `grafana/k6` Pod in
 `crypto-wallet-app`. The Pod hits the `frontend` Service directly, so no
 local port-forward sits in the latency path, and it pushes metrics to
 Prometheus via remote write. The Pod carries the label

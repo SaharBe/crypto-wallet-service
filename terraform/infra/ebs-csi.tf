@@ -41,11 +41,7 @@ data "aws_iam_policy_document" "ebs_csi_driver_assume_role" {
 resource "aws_iam_role" "ebs_csi_driver" {
   name               = "${local.cluster_name}-ebs-csi-driver"
   assume_role_policy = data.aws_iam_policy_document.ebs_csi_driver_assume_role.json
-
-  tags = {
-    Environment = "production"
-    Project     = "crypto-wallet-idp"
-  }
+  # Tags come from the provider's default_tags (providers.tf).
 }
 
 resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {

@@ -52,7 +52,7 @@ HOST_HEADER_ARG := $(if $(filter undefined,$(origin HOST_HEADER)),,-e HOST_HEADE
 LOAD_SECRETS := if [ -f $(SECRETS_ENV) ]; then set -a; . ./$(SECRETS_ENV); set +a; fi
 
 .DEFAULT_GOAL := help
-.PHONY: help up down build vault-init test-load setup-hosts ingress-forward argocd-password \
+.PHONY: help up down verify-clean build vault-init test-load setup-hosts ingress-forward argocd-password \
 	local-up local-down local-clean local-smoke local-logs ai-kubeconfig radar k6-version
 
 help: ## Show this help
@@ -62,11 +62,14 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-up: ## Spin up the entire stack (runs ./bootstrap.sh)
-	./bootstrap.sh
+up: ## Spin up the entire stack (runs scripts/bootstrap.sh)
+	./scripts/bootstrap.sh
 
-down: ## Tear down AWS infrastructure — terraform destroy, auto-approved
-	terraform -chdir=$(TF_INFRA_DIR) destroy --auto-approve
+down: ## Tear down everything `make up` created (k8s LBs/PVCs, then terraform destroy), then verify-clean; auto-approved
+	@AWS_REGION=$(AWS_REGION) TF_INFRA_DIR=$(TF_INFRA_DIR) ./scripts/teardown.sh
+
+verify-clean: ## Read-only: list anything from this project still in AWS; exits non-zero if something is left
+	@AWS_REGION=$(AWS_REGION) ./scripts/verify-clean.sh
 
 setup-hosts: ## Add argocd.local/grafana.local/vault.local/wallet.local to /etc/hosts (sudo if needed)
 	@./scripts/setup-hosts.sh
@@ -140,10 +143,8 @@ build: ## Build & push Docker images for every service in $(SERVICES) to ECR
 		tag="$${tag:-latest}"; \
 		docker build -t "$${ECR_REGISTRY}/$$svc:latest" "./services/$$svc"; \
 		if [ "$$tag" != "latest" ]; then docker tag "$${ECR_REGISTRY}/$$svc:latest" "$${ECR_REGISTRY}/$$svc:$$tag"; fi; \
-		echo "🔎 Ensuring ECR repository '$$svc' exists ($(AWS_REGION))..."; \
-		aws ecr describe-repositories --repository-names "$$svc" --region $(AWS_REGION) >/dev/null 2>&1 \
-			|| aws ecr create-repository --repository-name "$$svc" --region $(AWS_REGION) \
-				--image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null; \
+		echo "🔎 Checking ECR repository '$$svc' exists ($(AWS_REGION); created only by terraform/infra/ecr.tf)..."; \
+		AWS_REGION=$(AWS_REGION) ./scripts/check-ecr-repos.sh --in-aws "$$svc" || exit 1; \
 		if [ "$$tag" != "latest" ]; then \
 			echo "🚀 Pushing $$svc to ECR (latest, and pinned tag $$tag)..."; \
 			docker push "$${ECR_REGISTRY}/$$svc:latest"; \

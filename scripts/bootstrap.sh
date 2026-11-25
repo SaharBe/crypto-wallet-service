@@ -2,6 +2,10 @@
 
 set -e
 
+# Every path below (secrets.env, terraform/, k8s/, scripts/) is relative to
+# the repo root, so run from there wherever this is invoked from.
+cd "$(dirname "$0")/.."
+
 START_TIME=$SECONDS
 
 echo "=================================================="
@@ -39,6 +43,30 @@ if ! command -v argocd >/dev/null 2>&1; then
   exit 1
 fi
 
+SERVICES=("order-service" "wallet-service" "frontend")
+
+# Fail before Terraform spends anything if a service has no ECR repo in
+# terraform/infra/ecr.tf. Step 2 pushes to these repos and no longer creates
+# missing ones (see scripts/check-ecr-repos.sh for why).
+./scripts/check-ecr-repos.sh "${SERVICES[@]}"
+
+# Warn-only leak check, before anything is created. After a clean `make
+# down` it finds nothing; anything it does find leaked from an earlier
+# cycle. That's how a VPC + NAT GW that dropped out of Terraform state in
+# July went unnoticed (and billed) for months: nothing ever looked. Not
+# fatal: re-running `make up` on a live stack legitimately finds it all.
+echo -e "\n🔹 Step 0: Checking AWS for leftovers from earlier cycles (make verify-clean, warn-only)..."
+VERIFY_RC=0
+./scripts/verify-clean.sh || VERIFY_RC=$?
+if [ "$VERIFY_RC" -eq 1 ]; then
+  echo "⚠️  AWS already holds resources from this project (listed above). Expected only if a stack"
+  echo "   is already up and you're re-running 'make up'. Otherwise they leaked from an earlier"
+  echo "   cycle: once this run is done, 'make down' will fail on them until they're cleaned up."
+  echo "   Continuing."
+elif [ "$VERIFY_RC" -ne 0 ]; then
+  echo "⚠️  The leftover check itself couldn't run (see above); continuing without it."
+fi
+
 export TF_VAR_vault_token="$VAULT_TOKEN"
 export TF_VAR_db_username="$DB_USERNAME"
 export TF_VAR_db_password="$DB_PASSWORD"
@@ -55,8 +83,6 @@ aws eks update-kubeconfig --region us-east-1 --name crypto-wallet-eks-cluster
 
 echo "🔑 Logging in to AWS ECR..."
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-SERVICES=("order-service" "wallet-service" "frontend")
 
 for SERVICE in "${SERVICES[@]}"; do
   echo "📦 Building image for $SERVICE from ./services/$SERVICE..."
@@ -78,12 +104,11 @@ for SERVICE in "${SERVICES[@]}"; do
   docker build -t "${ECR_REGISTRY}/${SERVICE}:latest" "./services/${SERVICE}"
   [ "$TAG" != "latest" ] && docker tag "${ECR_REGISTRY}/${SERVICE}:latest" "${ECR_REGISTRY}/${SERVICE}:${TAG}"
 
-  # Terraform (terraform/infra/ecr.tf) is the source of truth for these repos,
-  # but a service added between infra applies would 404 on push — create on miss.
-  echo "🔎 Ensuring ECR repository '$SERVICE' exists..."
-  aws ecr describe-repositories --repository-names "$SERVICE" --region us-east-1 >/dev/null 2>&1 \
-    || aws ecr create-repository --repository-name "$SERVICE" --region us-east-1 \
-         --image-tag-mutability MUTABLE --image-scanning-configuration scanOnPush=true >/dev/null
+  # Terraform (terraform/infra/ecr.tf) is the only place ECR repos are
+  # created. This used to `aws ecr create-repository` on a miss, which put
+  # the repo outside Terraform state, so `make down` never destroyed it.
+  echo "🔎 Checking ECR repository '$SERVICE' exists (created by terraform/infra/ecr.tf)..."
+  ./scripts/check-ecr-repos.sh --in-aws "$SERVICE"
 
   if [ "$TAG" != "latest" ]; then
     echo "🚀 Pushing $SERVICE to ECR (latest, and pinned tag $TAG)..."

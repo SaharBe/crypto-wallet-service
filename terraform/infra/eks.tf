@@ -1,4 +1,3 @@
-# שימוש במודול ה-EKS הרשמי של AWS
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"
@@ -22,6 +21,12 @@ module "eks" {
       instance_types = ["t3.medium"]
       capacity_type  = "ON_DEMAND"
       ami_type       = "AL2023_x86_64_STANDARD"
+
+      # default_tags (providers.tf) only tags the launch template resource
+      # itself. The instances, root volumes and ENIs that EKS launches from
+      # it are tagged through the template's tag_specifications, which this
+      # feeds, so `make verify-clean` can find a node that outlives destroy.
+      launch_template_tags = local.common_tags
     }
   }
 
@@ -54,9 +59,6 @@ module "eks" {
     }
   }
 
-  tags = {
-    Environment = "production"
-    Project     = "crypto-wallet-idp"
-    ManagedBy   = "OpenTofu"
-  }
+  # Project/Environment/ManagedBy come from the provider's default_tags
+  # (providers.tf); no module-level tags so the two can't disagree.
 }

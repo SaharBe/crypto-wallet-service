@@ -82,7 +82,7 @@ lifecycle.
 | Root module | Provisions | State |
 |---|---|---|
 | `terraform/state-backend` | S3 bucket (versioned, SSE-encrypted, public access blocked) and DynamoDB lock table | Local (bootstrap chicken-and-egg) |
-| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.35** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push), **EBS CSI driver** as an EKS add-on with an IRSA role, **VPC CNI** as a managed EKS add-on with `enableNetworkPolicy: "true"` | S3 remote backend |
+| `terraform/infra` | VPC (public and private subnets, NAT), **EKS 1.35** with a managed node group (`t3.medium`, min 1, desired 3, max 3) in private subnets, ECR repos (scan on push; the only place they're created), **EBS CSI driver** as an EKS add-on with an IRSA role, **VPC CNI** as a managed EKS add-on with `enableNetworkPolicy: "true"` | S3 remote backend |
 | `terraform/vault-config` | Vault Kubernetes auth backend, KV v2 mount, and one **policy + role + secret** per consumer through `terraform/modules/vault-config` | S3 remote backend |
 
 The `gp3` StorageClass (`k8s/apps/ebs-storageclass.yaml`) is backed by the
@@ -93,9 +93,53 @@ without prefix delegation. That caps each `t3.medium` at **17 pods**.
 Under a full HPA scale-out this limit is reached before CPU or memory, and
 it is a known part of the environment's design.
 
+**Tagging:** every AWS resource `terraform/infra` creates gets
+`Project=crypto-wallet`, `ManagedBy=terraform` and `Environment` from the
+provider's `default_tags`; node instances, their volumes and ENIs get the
+same tags via the node group's `launch_template_tags`. What Kubernetes
+creates in AWS is tagged from the Kubernetes side: the `gp3` StorageClass
+adds `Project=crypto-wallet` to every EBS volume (`tagSpecification_1`), on
+top of the cluster tags the EBS CSI driver always sets.
+
+### Teardown (`make down`)
+
+`make down` runs `scripts/teardown.sh`. A bare `terraform destroy` used to
+leak: Kubernetes creates AWS resources Terraform never sees, and only the
+controller that created them can delete them, while it is still running.
+Destroying the nodes and the EBS CSI add-on with PVCs still bound left
+Postgres' 5Gi and Kafka's 8Gi volume behind on every cycle. The order is
+what fixes it:
+
+| Step | What | Why |
+|---|---|---|
+| 1 | Find the cluster; use a throwaway kubeconfig for it | If it's already gone (or `DELETING` from an earlier run), skip steps 2-4 and still destroy + verify. The throwaway kubeconfig means kubectl can't hit another context |
+| 2 | Delete the ApplicationSet, `root-application` and every Application (cascading, `resources-finalizer`) | Otherwise `selfHeal` recreates whatever step 3/4 deletes. Patching auto-sync off isn't enough: the ApplicationSet controller re-renders it. If cascade deletion hangs past its timeout, finalizers are stripped with a loud WARNING (ArgoCD then stops cleaning up, so steps 3-4 and verify-clean are what catch a leak) |
+| 3 | Delete LoadBalancer Services and Ingresses; wait until AWS shows no LB / `k8s-*` SG for the cluster | An ELB outlives its Service if the controller is gone, and it blocks VPC deletion. Today ingress-nginx is `ClusterIP`, so this is a guard |
+| 4 | Delete PVC-mounting workloads, then all PVCs; wait until the EBS volumes behind this cluster's PVs are gone **in AWS** | Kafka's PVC comes from a StatefulSet `volumeClaimTemplate`: ArgoCD doesn't track it and StatefulSets never delete it. A PV disappearing in Kubernetes is not proof; the AWS API is |
+| 5 | `terraform init`, destroy `module.eks`, release leftover ENIs/SGs in the VPC, destroy the rest | `init` so a fresh clone or stale `.terraform` can't target the wrong state. EKS control-plane ENIs are released minutes after the cluster, and VPC-CNI `aws-K8S-*` ENIs or `eks-cluster-sg-*` can linger. Any of them fails subnet/VPC deletion with `DependencyViolation` |
+| 6 | `make verify-clean` | `terraform destroy` only knows its state. A VPC + NAT GW from a 2026-07-01 apply dropped out of state during the move to the S3 backend, and every later destroy "succeeded" while it billed for months |
+
+Every wait is bounded and ends with a message naming what's stuck; every
+step tolerates "already gone", so after a failure you fix the cause and run
+`make down` again. The script only deletes things in this cluster or in the
+VPC in Terraform state; anything else it finds is left for verify-clean to
+report.
+
+`make verify-clean` (`scripts/verify-clean.sh`) is read-only. It checks
+us-east-1 and global IAM for anything carrying `Project=crypto-wallet` (or
+the legacy `crypto-wallet-idp` / `crypto-wallet-service` values) or this
+cluster's tags: EKS, EC2, EBS, ELB/ALB/NLB, NAT, EIPs, non-default VPCs and
+their ENIs/SGs, launch templates, ECR, EKS log groups, KMS keys not yet
+scheduled for deletion, IAM roles/policies/OIDC. It exits 1 and lists what it
+found, or 2 if a query failed (never a false "clean"). It queries each
+service's own API instead of a tag-wide sweep, because the state bucket and
+lock table also carry `Project=crypto-wallet` and must survive; the default
+VPC is excluded. `make up` runs it warn-only first, so a leak shows up on
+the next cycle instead of months later.
+
 ## 4. Delivery layer: ArgoCD GitOps
 
-`bootstrap.sh` installs a pinned ArgoCD release (`ARGOCD_VERSION`) and applies
+`scripts/bootstrap.sh` installs a pinned ArgoCD release (`ARGOCD_VERSION`) and applies
 exactly one manifest by hand: `k8s/root-app.yaml`. Everything else is
 reconciled from git. See [Upgrading ArgoCD](#upgrading-argocd) below.
 
@@ -150,7 +194,7 @@ everything else.
 ### Upgrading ArgoCD
 
 ArgoCD is the one component installed outside GitOps (it can't deploy
-itself before it exists), so its version is pinned in `bootstrap.sh`
+itself before it exists), so its version is pinned in `scripts/bootstrap.sh`
 instead of an Application. `ARGOCD_VERSION` is an exact release tag, never
 the moving `stable` branch. Otherwise each `make up` could install a
 different ArgoCD with no trace in git, and diff/sync behaviour changes
@@ -160,7 +204,7 @@ the bootstrap.
 
 To upgrade:
 
-1. Bump `ARGOCD_VERSION` in `bootstrap.sh` on a `fix/` or `feat/` branch.
+1. Bump `ARGOCD_VERSION` in `scripts/bootstrap.sh` on a `fix/` or `feat/` branch.
 2. Read the [release notes](https://github.com/argoproj/argo-cd/releases)
    for every version in between, plus the upstream upgrade guide for any
    minor or major jump. Look for diff/sync, hook and CRD changes.

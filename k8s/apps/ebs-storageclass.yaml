@@ -21,3 +21,11 @@ allowVolumeExpansion: true
 parameters:
   type: gp3
   fsType: ext4
+  # The CSI driver already tags each volume with the cluster
+  # (ebs.csi.aws.com/cluster-name, kubernetes.io/cluster/<name>) and the PVC
+  # it was made for; this adds the same Project tag Terraform's default_tags
+  # put on everything else, so `make verify-clean` can find a leaked volume
+  # by project as well as by cluster. StorageClass parameters are immutable:
+  # on a cluster that already has gp3, `kubectl delete sc gp3` once and let
+  # ArgoCD recreate it (existing PVs are unaffected).
+  tagSpecification_1: "Project=crypto-wallet"

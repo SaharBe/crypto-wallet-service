@@ -30,9 +30,6 @@ module "vpc" {
     "kubernetes.io/role/internal-elb"             = "1"
   }
 
-  tags = {
-    Environment = "production"
-    Project     = "crypto-wallet-service"
-    ManagedBy   = "OpenTofu"
-  }
+  # Project/Environment/ManagedBy come from the provider's default_tags
+  # (providers.tf); no module-level tags so the two can't disagree.
 }

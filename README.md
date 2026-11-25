@@ -160,11 +160,13 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 | [`terraform`](https://developer.hashicorp.com/terraform/install) | | ✅ | Provisioning AWS infrastructure and configuring Vault |
 | [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) | | ✅ | Admin login and verification at bootstrap |
 | `envsubst` (`gettext` package) | | ✅ | Templating `k8s/root-app.yaml` at bootstrap |
+| [`jq`](https://jqlang.org/download/) | | ✅ | Selecting PVCs, PVs and LoadBalancer Services during `make down` |
 | [`k6`](https://k6.io/docs/get-started/installation/) | optional | optional | Load testing. Without it, `make test-load` falls back to the `grafana/k6` Docker image. CI and in-cluster runs use the version pinned by `K6_VERSION` in the Makefile |
 | [`helm`](https://helm.sh/docs/intro/install/) | | optional | Only for running the Helm-values PR check locally. ArgoCD renders the charts itself |
 
 The cloud path provisions **billable AWS resources** (EKS control plane,
-3 EC2 nodes, NAT gateway, EBS volumes). Run `make down` when you are done.
+3 EC2 nodes, NAT gateway, EBS volumes). Run `make down` when you are done;
+it fails, listing what's left, if anything from the project survives.
 
 ## Quickstart A: Local Development (Docker Compose)
 
@@ -291,10 +293,16 @@ Kyverno or Prometheus/Grafana locally.
    pins them, and ArgoCD rolls them out (see [CI/CD](#cicd)). `make build`
    pushes images manually if you ever need it.
 
-7. **Tear down.** This destroys the Terraform-provisioned AWS
-   infrastructure and auto-approves the destroy:
+7. **Tear down.** This removes everything `make up` created, with no
+   confirmation prompt. It deletes the ArgoCD apps, the Kubernetes-created
+   load balancers and PVC volumes, then runs `terraform destroy`, and finally
+   `make verify-clean`, which fails if anything tagged for the project is
+   still in AWS. Only the Terraform state bucket and lock table are kept.
+   It is safe to re-run after a failure. See
+   [architecture.md](architecture.md#teardown-make-down) for the order and why.
    ```bash
    make down
+   make verify-clean    # read-only; also runs (warn-only) at the start of make up
    ```
 
 ## Local vs. Production Traffic Routing
@@ -333,11 +341,12 @@ the frontend's reverse proxy, and HPA scaling of the backends.
 | Command | What it does |
 |---|---|
 | `make local-up` / `local-smoke` / `local-logs` / `local-down` / `local-clean` | Docker Compose lifecycle (Quickstart A) |
-| `make up` / `make down` | Bootstrap or destroy the cloud platform (Quickstart B) |
+| `make up` / `make down` | Bootstrap or tear down the cloud platform (Quickstart B). `make down` ends with `make verify-clean` |
+| `make verify-clean` | Read-only: lists anything from this project still in AWS and exits non-zero if something is left |
 | `make ingress-forward` | Port-forwards ingress-nginx to `localhost:8080`, the local stand-in for a load balancer |
 | `make setup-hosts` | Adds the `*.local` hostnames to `/etc/hosts` |
 | `make vault-init` | Re-applies the Vault Terraform config. Safe to re-run |
-| `make build` | Builds all service images and pushes them to ECR |
+| `make build` | Builds all service images and pushes them to ECR. Fails if a service has no repo in `terraform/infra/ecr.tf` |
 | `make argocd-password` | Prints the ArgoCD admin login for the UI |
 | `make radar` | Runs Radar on `localhost:9280` with the read-only AI kubeconfig, minting it first if it's missing or expired ([AI-Assisted Operations](#ai-assisted-operations)). `make ai-kubeconfig` forces a new token |
 | `make test-load` | Runs `load-test.js` against `BASE_URL` (default `http://localhost:8080`) with `Host: wallet.local` |

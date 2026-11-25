@@ -21,6 +21,13 @@ spec:
           # provision or pay for.
           service:
             type: ClusterIP
+            # Inert while the type is ClusterIP. If this is ever switched to
+            # LoadBalancer, the in-tree AWS cloud provider tags the ELB it
+            # creates (and its security group) with these, so a leaked LB
+            # shows up in `make verify-clean` by project, not only by the
+            # kubernetes.io/cluster/<name> tag it adds on its own.
+            annotations:
+              service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "Project=crypto-wallet"
           # k8s/apps/kyverno-policies/disallow-missing-limits.yaml enforces
           # resource limits on every Pod outside kube-system/argocd/kyverno/
           # monitoring. ingress-nginx isn't in that exclude list, so the

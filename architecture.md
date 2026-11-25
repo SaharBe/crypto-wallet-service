@@ -139,7 +139,7 @@ the next cycle instead of months later.
 
 ## 4. Delivery layer: ArgoCD GitOps
 
-`bootstrap.sh` installs a pinned ArgoCD release (`ARGOCD_VERSION`) and applies
+`scripts/bootstrap.sh` installs a pinned ArgoCD release (`ARGOCD_VERSION`) and applies
 exactly one manifest by hand: `k8s/root-app.yaml`. Everything else is
 reconciled from git. See [Upgrading ArgoCD](#upgrading-argocd) below.
 
@@ -194,7 +194,7 @@ everything else.
 ### Upgrading ArgoCD
 
 ArgoCD is the one component installed outside GitOps (it can't deploy
-itself before it exists), so its version is pinned in `bootstrap.sh`
+itself before it exists), so its version is pinned in `scripts/bootstrap.sh`
 instead of an Application. `ARGOCD_VERSION` is an exact release tag, never
 the moving `stable` branch. Otherwise each `make up` could install a
 different ArgoCD with no trace in git, and diff/sync behaviour changes
@@ -204,7 +204,7 @@ the bootstrap.
 
 To upgrade:
 
-1. Bump `ARGOCD_VERSION` in `bootstrap.sh` on a `fix/` or `feat/` branch.
+1. Bump `ARGOCD_VERSION` in `scripts/bootstrap.sh` on a `fix/` or `feat/` branch.
 2. Read the [release notes](https://github.com/argoproj/argo-cd/releases)
    for every version in between, plus the upstream upgrade guide for any
    minor or major jump. Look for diff/sync, hook and CRD changes.

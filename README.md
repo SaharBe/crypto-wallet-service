@@ -141,11 +141,10 @@ them. [architecture.md](architecture.md) covers the full breakdown.
 │   └── modules/vault-config/ # Reusable "one consumer = one role + policy + secret" module
 ├── tests/performance/        # k6 scripts + in-cluster runner
 ├── local-dev/                # Compose init SQL + end-to-end smoke test
-├── scripts/                  # setup-hosts, read-only AI kubeconfig, CI helpers
+├── scripts/                  # bootstrap (`make up`), teardown (`make down`), verify-clean, setup-hosts, AI kubeconfig, CI helpers
 ├── docs/                     # Experiment evidence (resilience screenshots, AI-ops demo)
 ├── .mcp.json                 # Claude Code → Radar read-only MCP endpoint
 ├── docker-compose.yml        # Local stack
-├── bootstrap.sh              # End-to-end cloud bootstrap (`make up`)
 └── Makefile                  # Single operations entry point (`make help`)
 ```
 
@@ -257,12 +256,12 @@ Kyverno or Prometheus/Grafana locally.
 
 3. **Bring the platform up:**
    ```bash
-   make up          # runs ./bootstrap.sh end to end
+   make up          # runs scripts/bootstrap.sh end to end
    ```
-   `bootstrap.sh` takes these steps:
+   `scripts/bootstrap.sh` takes these steps:
    1. Provisions VPC, EKS, ECR and the EBS CSI driver with Terraform.
    2. Builds the first service images and pushes them to ECR.
-   3. Installs ArgoCD (pinned via `ARGOCD_VERSION` in `bootstrap.sh`; see
+   3. Installs ArgoCD (pinned via `ARGOCD_VERSION` in `scripts/bootstrap.sh`; see
       [Upgrading ArgoCD](architecture.md#upgrading-argocd)) and sets the admin password.
    4. Seeds the one bootstrap repo credential and applies the App-of-Apps.
    5. Runs `make vault-init` as soon as Vault is healthy.

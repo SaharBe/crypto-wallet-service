@@ -106,7 +106,7 @@ Run the same checks CI runs (Section 4.1). All must pass:
 - Pin images to immutable tags, never `:latest`, for anything ArgoCD deploys.
   Don't hand-edit the ECR image tags in `k8s/components/{wallet-service,order-service,frontend}.yaml`;
   `ci.yml` owns them.
-- ArgoCD itself is pinned by `ARGOCD_VERSION` in `bootstrap.sh` (an exact tag,
+- ArgoCD itself is pinned by `ARGOCD_VERSION` in `scripts/bootstrap.sh` (an exact tag,
   never `stable`). Bump it only in a PR, following "Upgrading ArgoCD" in
   architecture.md.
 - HPAs own `spec.replicas` for `wallet-service`, `order-service` and `frontend`
@@ -338,7 +338,7 @@ gate every mutating command in them behind an explicit ask-first step.
 ### 4.6 Platform lifecycle (confirm with the user first)
 
 ```bash
-make up            # full bootstrap via ./bootstrap.sh
+make up            # full bootstrap via scripts/bootstrap.sh
 make vault-init    # (re)configure Vault via Terraform, safe to re-run
 make build         # build & push all service images to ECR
 make down          # DESTRUCTIVE (auto-approved): scripts/teardown.sh deletes ArgoCD apps, LB Services,
@@ -347,7 +347,7 @@ make down          # DESTRUCTIVE (auto-approved): scripts/teardown.sh deletes Ar
 make verify-clean  # read-only: anything tagged Project=crypto-wallet / the cluster still in AWS? (exit 1 = yes)
 ```
 
-ECR repositories are created only by `terraform/infra/ecr.tf`. `bootstrap.sh`
+ECR repositories are created only by `terraform/infra/ecr.tf`. `scripts/bootstrap.sh`
 and `make build` fail (via `scripts/check-ecr-repos.sh`) on a service with no
 repo there; add the `aws_ecr_repository` block rather than creating it by hand.
 AWS resources get `Project=crypto-wallet` from the provider's `default_tags`

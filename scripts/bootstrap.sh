@@ -2,6 +2,10 @@
 
 set -e
 
+# Every path below (secrets.env, terraform/, k8s/, scripts/) is relative to
+# the repo root, so run from there wherever this is invoked from.
+cd "$(dirname "$0")/.."
+
 START_TIME=$SECONDS
 
 echo "=================================================="

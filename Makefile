@@ -62,8 +62,8 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-up: ## Spin up the entire stack (runs ./bootstrap.sh)
-	./bootstrap.sh
+up: ## Spin up the entire stack (runs scripts/bootstrap.sh)
+	./scripts/bootstrap.sh
 
 down: ## Tear down everything `make up` created (k8s LBs/PVCs, then terraform destroy), then verify-clean; auto-approved
 	@AWS_REGION=$(AWS_REGION) TF_INFRA_DIR=$(TF_INFRA_DIR) ./scripts/teardown.sh
